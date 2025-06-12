@@ -1,0 +1,40 @@
+# Build artifacts
+build/
+dist/
+odata-mcp
+*.exe
+
+# Development files
+.git/
+.gitignore
+*.md
+!README.md
+
+# Test files
+*_test.go
+test_*.go
+test_*.sh
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.log
+
+# Documentation (except README)
+docs/
+*.md
+!README.md
+
+# CI/CD files
+.github/
+.gitlab-ci.yml
+Jenkinsfile

@@ -149,16 +149,38 @@ func (s *Server) Stop() {
 
 // handleMessage processes a single JSON-RPC message
 func (s *Server) handleMessage(line string) error {
+	// Parse as generic JSON first to check structure
+	var rawMsg map[string]interface{}
+	if err := json.Unmarshal([]byte(line), &rawMsg); err != nil {
+		// Can't send error response if we can't parse JSON
+		log.Printf("Parse error: %v", err)
+		return err
+	}
+	
+	// Check if it's a notification (no ID) or request (has ID)
 	var req Request
 	if err := json.Unmarshal([]byte(line), &req); err != nil {
-		return s.sendError(nil, -32700, "Parse error", err.Error())
+		// Try to get ID from raw message for error response
+		var id interface{}
+		if rawID, exists := rawMsg["id"]; exists {
+			id = rawID
+		}
+		return s.sendError(id, -32700, "Parse error", err.Error())
+	}
+	
+	// Handle notifications differently (no response expected)
+	if req.Method == "initialized" {
+		return s.handleInitialized(&req)
+	}
+	
+	// For requests, ensure we have an ID (except notifications)
+	if req.ID == nil && req.Method != "initialized" {
+		return s.sendError(1, -32600, "Invalid request", "Missing ID for request")
 	}
 	
 	switch req.Method {
 	case "initialize":
 		return s.handleInitialize(&req)
-	case "initialized":
-		return s.handleInitialized(&req)
 	case "tools/list":
 		return s.handleToolsList(&req)
 	case "tools/call":

@@ -187,17 +187,26 @@ func (c *ODataClient) GetMetadata(ctx context.Context) (*models.ODataMetadata, e
 func (c *ODataClient) GetEntitySet(ctx context.Context, entitySet string, options map[string]string) (*models.ODataResponse, error) {
 	endpoint := entitySet
 	
-	// Build query parameters
-	if len(options) > 0 {
-		params := url.Values{}
-		for key, value := range options {
-			if value != "" {
-				params.Add(key, value)
-			}
+	// Build query parameters with standard OData v2 parameters
+	params := url.Values{}
+	
+	// Always add JSON format for consistent responses
+	params.Add(constants.QueryFormat, "json")
+	
+	// Add inline count for pagination support unless explicitly requesting count only
+	if _, hasInlineCount := options[constants.QueryInlineCount]; !hasInlineCount {
+		params.Add(constants.QueryInlineCount, "allpages")
+	}
+	
+	// Add user-provided parameters
+	for key, value := range options {
+		if value != "" {
+			params.Set(key, value) // Use Set to override defaults if needed
 		}
-		if len(params) > 0 {
-			endpoint += "?" + params.Encode()
-		}
+	}
+	
+	if len(params) > 0 {
+		endpoint += "?" + params.Encode()
 	}
 
 	req, err := c.buildRequest(ctx, constants.GET, endpoint, nil)
@@ -410,9 +419,76 @@ func (c *ODataClient) parseODataResponse(resp *http.Response) (*models.ODataResp
 		return &models.ODataResponse{}, nil
 	}
 
+	// Log raw response for debugging
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Raw response: %s\n", string(body))
+	}
+
+	// OData v2 typically wraps results in a "d" property
+	var wrapper struct {
+		D json.RawMessage `json:"d"`
+	}
+	
+	if err := json.Unmarshal(body, &wrapper); err != nil {
+		// Try direct parsing if no wrapper
+		var odataResp models.ODataResponse
+		if err := json.Unmarshal(body, &odataResp); err != nil {
+			return nil, fmt.Errorf("failed to parse OData response: %w", err)
+		}
+		c.optimizeResponse(&odataResp)
+		return &odataResp, nil
+	}
+
+	// Parse the wrapped response
 	var odataResp models.ODataResponse
-	if err := json.Unmarshal(body, &odataResp); err != nil {
-		return nil, fmt.Errorf("failed to parse OData response: %w", err)
+	if len(wrapper.D) > 0 {
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Wrapped content: %s\n", string(wrapper.D))
+		}
+		
+		// OData v2 responses typically have a structure like:
+		// { "d": { "results": [...], "__count": "N" } } for collections
+		// { "d": { ...entity properties... } } for single entities
+		
+		// First check if it's a collection response
+		var collectionCheck struct {
+			Results json.RawMessage `json:"results"`
+		}
+		if err := json.Unmarshal(wrapper.D, &collectionCheck); err == nil && len(collectionCheck.Results) > 0 {
+			// It's a collection - parse as such
+			var collection struct {
+				Results []json.RawMessage `json:"results"`
+				Count   string           `json:"__count,omitempty"`
+			}
+			if err := json.Unmarshal(wrapper.D, &collection); err != nil {
+				return nil, fmt.Errorf("failed to parse collection response: %w", err)
+			}
+			
+			// Convert raw messages to interface{}
+			entities := make([]interface{}, len(collection.Results))
+			for i, raw := range collection.Results {
+				var entity interface{}
+				if err := json.Unmarshal(raw, &entity); err != nil {
+					return nil, fmt.Errorf("failed to parse entity %d: %w", i, err)
+				}
+				entities[i] = entity
+			}
+			odataResp.Value = entities
+			
+			if collection.Count != "" {
+				var count int64
+				fmt.Sscanf(collection.Count, "%d", &count)
+				odataResp.Count = &count
+			}
+		} else {
+			// It's a single entity - parse the entity directly
+			var entity interface{}
+			if err := json.Unmarshal(wrapper.D, &entity); err != nil {
+				return nil, fmt.Errorf("failed to parse single entity response: %w", err)
+			}
+			// For single entities, put the entity directly in Value (not wrapped in array)
+			odataResp.Value = entity
+		}
 	}
 
 	// Process GUIDs if needed (to be implemented)
@@ -460,7 +536,33 @@ func (c *ODataClient) parseMetadataXML(data []byte) (*models.ODataMetadata, erro
 
 // getServiceDocument gets the service document as fallback
 func (c *ODataClient) getServiceDocument(ctx context.Context) (*models.ODataMetadata, error) {
-	// TODO: Implement service document parsing as fallback
-	// This would be used when metadata parsing fails
-	return nil, fmt.Errorf("service document parsing not yet implemented")
+	req, err := c.buildRequest(ctx, constants.GET, "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set(constants.Accept, constants.ContentTypeJSON)
+
+	resp, err := c.doRequest(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, c.parseError(resp)
+	}
+
+	// For now, return a minimal metadata structure
+	// In a full implementation, this would parse the service document
+	metadata := &models.ODataMetadata{
+		ServiceRoot:     c.baseURL,
+		EntityTypes:     make(map[string]*models.EntityType),
+		EntitySets:      make(map[string]*models.EntitySet),
+		FunctionImports: make(map[string]*models.FunctionImport),
+		Version:         "2.0",
+		ParsedAt:        time.Now(),
+	}
+
+	return metadata, nil
 }

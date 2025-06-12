@@ -19,17 +19,74 @@ This is a Go port of the Python OData-MCP bridge implementation, designed to be 
 
 ## Installation
 
+### Download Binary
+
+Download the appropriate binary for your platform from the releases page.
+
 ### Build from Source
 
+#### Quick Build (Go required)
 ```bash
 git clone <repository-url>
 cd odata_mcp_go
 go build -o odata-mcp cmd/odata-mcp/main.go
 ```
 
-### Download Binary
+#### Using Makefile (Recommended)
+```bash
+# Build for current platform
+make build
 
-Download the appropriate binary for your platform from the releases page.
+# Build for all platforms
+make build-all
+
+# Build and test
+make dev
+
+# See all options
+make help
+```
+
+#### Using Build Script
+```bash
+# Build for current platform
+./build.sh
+
+# Build for all platforms
+./build.sh all
+
+# See all options
+./build.sh help
+```
+
+#### Cross-Compilation Examples
+```bash
+# Using Make
+make build-linux     # Linux (amd64)
+make build-windows   # Windows (amd64)
+make build-macos     # macOS (Intel + Apple Silicon)
+
+# Using build script
+./build.sh linux     # Linux (amd64)
+./build.sh windows   # Windows (amd64)
+./build.sh macos     # macOS (Intel + Apple Silicon)
+
+# Manual Go build
+GOOS=linux GOARCH=amd64 go build -o odata-mcp-linux cmd/odata-mcp/main.go
+GOOS=windows GOARCH=amd64 go build -o odata-mcp.exe cmd/odata-mcp/main.go
+```
+
+#### Docker Build
+```bash
+# Build Docker image
+make docker
+
+# Or manually
+docker build -t odata-mcp .
+
+# Run in container
+docker run --rm -it odata-mcp --help
+```
 
 ## Usage
 

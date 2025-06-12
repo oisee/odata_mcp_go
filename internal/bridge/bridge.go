@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -229,7 +230,7 @@ func (b *ODataMCPBridge) generateFilterTool(entitySetName string, entitySet *mod
 
 	description := fmt.Sprintf("List/filter %s entities with OData query options", entitySetName)
 
-	// Build input schema
+	// Build input schema with basic compliance
 	properties := map[string]interface{}{
 		"$filter": map[string]interface{}{
 			"type":        "string",
@@ -396,14 +397,18 @@ func (b *ODataMCPBridge) generateGetTool(entitySetName string, entitySet *models
 		"description": "Navigation properties to expand",
 	}
 
+	inputSchema := map[string]interface{}{
+		"type":       "object",
+		"properties": properties,
+	}
+	if len(required) > 0 {
+		inputSchema["required"] = required
+	}
+	
 	tool := &mcp.Tool{
 		Name:        toolName,
 		Description: description,
-		InputSchema: map[string]interface{}{
-			"type":       "object",
-			"properties": properties,
-			"required":   required,
-		},
+		InputSchema: inputSchema,
 	}
 
 	handler := func(ctx context.Context, args map[string]interface{}) (interface{}, error) {
@@ -769,46 +774,303 @@ func (b *ODataMCPBridge) GetTraceInfo() (*models.TraceInfo, error) {
 // and return formatted responses. For brevity, I'm showing the signatures:
 
 func (b *ODataMCPBridge) handleServiceInfo(ctx context.Context, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement service info handler
-	return "Service info not yet implemented", nil
+	includeMetadata := false
+	if val, ok := args["include_metadata"].(bool); ok {
+		includeMetadata = val
+	}
+
+	info := map[string]interface{}{
+		"service_url": b.config.ServiceURL,
+		"entity_sets": len(b.metadata.EntitySets),
+		"entity_types": len(b.metadata.EntityTypes),
+		"function_imports": len(b.metadata.FunctionImports),
+		"schema_namespace": b.metadata.SchemaNamespace,
+		"container_name": b.metadata.ContainerName,
+		"version": b.metadata.Version,
+		"parsed_at": b.metadata.ParsedAt.Format("2006-01-02T15:04:05Z"),
+	}
+
+	if includeMetadata {
+		info["entity_sets_detail"] = b.metadata.EntitySets
+		info["entity_types_detail"] = b.metadata.EntityTypes
+		info["function_imports_detail"] = b.metadata.FunctionImports
+	}
+
+	response, err := json.Marshal(info)
+	if err != nil {
+		return "Error formatting service info", err
+	}
+
+	return string(response), nil
 }
 
 func (b *ODataMCPBridge) handleEntityFilter(ctx context.Context, entitySetName string, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement entity filter handler
-	return "Entity filter not yet implemented", nil
+	// Build query options from arguments
+	options := make(map[string]string)
+	
+	// Handle each possible parameter
+	if filter, ok := args["$filter"].(string); ok && filter != "" {
+		options[constants.QueryFilter] = filter
+	}
+	if selectParam, ok := args["$select"].(string); ok && selectParam != "" {
+		options[constants.QuerySelect] = selectParam
+	}
+	if expand, ok := args["$expand"].(string); ok && expand != "" {
+		options[constants.QueryExpand] = expand
+	}
+	if orderby, ok := args["$orderby"].(string); ok && orderby != "" {
+		options[constants.QueryOrderBy] = orderby
+	}
+	if top, ok := args["$top"].(float64); ok {
+		options[constants.QueryTop] = fmt.Sprintf("%d", int(top))
+	}
+	if skip, ok := args["$skip"].(float64); ok {
+		options[constants.QuerySkip] = fmt.Sprintf("%d", int(skip))
+	}
+	
+	// Call OData client to get entity set
+	response, err := b.client.GetEntitySet(ctx, entitySetName, options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to filter entities: %w", err)
+	}
+	
+	// Format response as JSON string
+	result, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to format response: %w", err)
+	}
+	
+	return string(result), nil
 }
 
 func (b *ODataMCPBridge) handleEntityCount(ctx context.Context, entitySetName string, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement entity count handler
-	return "Entity count not yet implemented", nil
+	// Build query options - for count we typically only need filter
+	options := make(map[string]string)
+	
+	if filter, ok := args["$filter"].(string); ok && filter != "" {
+		options[constants.QueryFilter] = filter
+	}
+	
+	// Add $inlinecount=allpages to get inline count (OData v2 syntax)
+	options[constants.QueryInlineCount] = "allpages"
+	options[constants.QueryTop] = "0" // We only want the count, not the data
+	
+	// Call OData client to get count
+	response, err := b.client.GetEntitySet(ctx, entitySetName, options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get entity count: %w", err)
+	}
+	
+	// Extract count from response
+	count := int64(0)
+	if response.Count != nil {
+		count = *response.Count
+	}
+	
+	// Return count as formatted string
+	return fmt.Sprintf(`{"count": %d}`, count), nil
 }
 
 func (b *ODataMCPBridge) handleEntitySearch(ctx context.Context, entitySetName string, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement entity search handler
-	return "Entity search not yet implemented", nil
+	// Get search term
+	searchTerm, ok := args["search"].(string)
+	if !ok {
+		searchTerm, ok = args["search_term"].(string)
+		if !ok {
+			return nil, fmt.Errorf("missing required parameter: search_term")
+		}
+	}
+	
+	// Build query options
+	options := make(map[string]string)
+	options[constants.QuerySearch] = searchTerm
+	
+	// Handle optional parameters
+	if top, ok := args["$top"].(float64); ok {
+		options[constants.QueryTop] = fmt.Sprintf("%d", int(top))
+	}
+	if skip, ok := args["$skip"].(float64); ok {
+		options[constants.QuerySkip] = fmt.Sprintf("%d", int(skip))
+	}
+	
+	// Call OData client to search entities
+	response, err := b.client.GetEntitySet(ctx, entitySetName, options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search entities: %w", err)
+	}
+	
+	// Format response as JSON string
+	result, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to format response: %w", err)
+	}
+	
+	return string(result), nil
 }
 
 func (b *ODataMCPBridge) handleEntityGet(ctx context.Context, entitySetName string, entityType *models.EntityType, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement entity get handler
-	return "Entity get not yet implemented", nil
+	// Build key values from arguments
+	key := make(map[string]interface{})
+	for _, keyProp := range entityType.KeyProperties {
+		if value, exists := args[keyProp]; exists {
+			key[keyProp] = value
+		} else {
+			return nil, fmt.Errorf("missing required key property: %s", keyProp)
+		}
+	}
+	
+	// Build query options for expand/select
+	options := make(map[string]string)
+	if selectParam, ok := args["$select"].(string); ok && selectParam != "" {
+		options[constants.QuerySelect] = selectParam
+	}
+	if expand, ok := args["$expand"].(string); ok && expand != "" {
+		options[constants.QueryExpand] = expand
+	}
+	
+	// Call OData client to get entity
+	response, err := b.client.GetEntity(ctx, entitySetName, key, options)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get entity: %w", err)
+	}
+	
+	// Format response as JSON string
+	result, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to format response: %w", err)
+	}
+	
+	return string(result), nil
 }
 
 func (b *ODataMCPBridge) handleEntityCreate(ctx context.Context, entitySetName string, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement entity create handler
-	return "Entity create not yet implemented", nil
+	// All arguments are the entity data (excluding system parameters)
+	entityData := make(map[string]interface{})
+	for k, v := range args {
+		// Skip any system parameters (starting with $)
+		if !strings.HasPrefix(k, "$") {
+			entityData[k] = v
+		}
+	}
+	
+	// Call OData client to create entity
+	response, err := b.client.CreateEntity(ctx, entitySetName, entityData)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create entity: %w", err)
+	}
+	
+	// Format response as JSON string
+	result, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to format response: %w", err)
+	}
+	
+	return string(result), nil
 }
 
 func (b *ODataMCPBridge) handleEntityUpdate(ctx context.Context, entitySetName string, entityType *models.EntityType, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement entity update handler
-	return "Entity update not yet implemented", nil
+	// Extract key values and method
+	key := make(map[string]interface{})
+	updateData := make(map[string]interface{})
+	method := constants.PUT // default method
+	
+	for k, v := range args {
+		if k == "_method" {
+			if m, ok := v.(string); ok {
+				method = m
+			}
+			continue
+		}
+		
+		// Check if this is a key property
+		isKey := false
+		for _, keyProp := range entityType.KeyProperties {
+			if k == keyProp {
+				key[k] = v
+				isKey = true
+				break
+			}
+		}
+		
+		// If not a key, it's update data
+		if !isKey && !strings.HasPrefix(k, "$") {
+			updateData[k] = v
+		}
+	}
+	
+	// Verify we have all required key properties
+	for _, keyProp := range entityType.KeyProperties {
+		if _, exists := key[keyProp]; !exists {
+			return nil, fmt.Errorf("missing required key property: %s", keyProp)
+		}
+	}
+	
+	// Call OData client to update entity
+	response, err := b.client.UpdateEntity(ctx, entitySetName, key, updateData, method)
+	if err != nil {
+		return nil, fmt.Errorf("failed to update entity: %w", err)
+	}
+	
+	// Format response as JSON string
+	result, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to format response: %w", err)
+	}
+	
+	return string(result), nil
 }
 
 func (b *ODataMCPBridge) handleEntityDelete(ctx context.Context, entitySetName string, entityType *models.EntityType, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement entity delete handler
-	return "Entity delete not yet implemented", nil
+	// Build key values from arguments
+	key := make(map[string]interface{})
+	for _, keyProp := range entityType.KeyProperties {
+		if value, exists := args[keyProp]; exists {
+			key[keyProp] = value
+		} else {
+			return nil, fmt.Errorf("missing required key property: %s", keyProp)
+		}
+	}
+	
+	// Call OData client to delete entity
+	_, err := b.client.DeleteEntity(ctx, entitySetName, key)
+	if err != nil {
+		return nil, fmt.Errorf("failed to delete entity: %w", err)
+	}
+	
+	// For successful deletes, return a simple success message
+	return `{"status": "success", "message": "Entity deleted successfully"}`, nil
 }
 
 func (b *ODataMCPBridge) handleFunctionCall(ctx context.Context, functionName string, function *models.FunctionImport, args map[string]interface{}) (interface{}, error) {
-	// TODO: Implement function call handler
-	return "Function call not yet implemented", nil
+	// Build parameters from arguments
+	parameters := make(map[string]interface{})
+	for _, param := range function.Parameters {
+		if param.Mode == "In" || param.Mode == "InOut" {
+			if value, exists := args[param.Name]; exists {
+				parameters[param.Name] = value
+			} else if !param.Nullable {
+				return nil, fmt.Errorf("missing required parameter: %s", param.Name)
+			}
+		}
+	}
+	
+	// Determine HTTP method (default to GET if not specified)
+	method := function.HTTPMethod
+	if method == "" {
+		method = constants.GET
+	}
+	
+	// Call OData client to execute function
+	response, err := b.client.CallFunction(ctx, functionName, parameters, method)
+	if err != nil {
+		return nil, fmt.Errorf("failed to call function: %w", err)
+	}
+	
+	// Format response as JSON string
+	result, err := json.Marshal(response)
+	if err != nil {
+		return nil, fmt.Errorf("failed to format response: %w", err)
+	}
+	
+	return string(result), nil
 }

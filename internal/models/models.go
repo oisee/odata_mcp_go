@@ -91,7 +91,7 @@ type ODataResponse struct {
 	Context   string                 `json:"@odata.context,omitempty"`
 	Count     *int64                 `json:"@odata.count,omitempty"`
 	NextLink  string                 `json:"@odata.nextLink,omitempty"`
-	Value     []interface{}          `json:"value,omitempty"`
+	Value     interface{}            `json:"value,omitempty"`
 	Error     *ODataError            `json:"error,omitempty"`
 	Metadata  map[string]interface{} `json:"@odata.metadata,omitempty"`
 }
