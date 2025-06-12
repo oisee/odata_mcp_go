@@ -1,0 +1,309 @@
+package mcp
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"sync"
+
+	"github.com/odata-mcp/go/internal/constants"
+)
+
+// Tool represents an MCP tool
+type Tool struct {
+	Name        string                 `json:"name"`
+	Description string                 `json:"description"`
+	InputSchema map[string]interface{} `json:"inputSchema"`
+}
+
+// ToolHandler is a function that handles tool execution
+type ToolHandler func(ctx context.Context, args map[string]interface{}) (interface{}, error)
+
+// Request represents an incoming MCP request
+type Request struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	ID      interface{}            `json:"id"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params,omitempty"`
+}
+
+// Response represents an outgoing MCP response
+type Response struct {
+	JSONRPC string      `json:"jsonrpc"`
+	ID      interface{} `json:"id"`
+	Result  interface{} `json:"result,omitempty"`
+	Error   *Error      `json:"error,omitempty"`
+}
+
+// Error represents an MCP error
+type Error struct {
+	Code    int         `json:"code"`
+	Message string      `json:"message"`
+	Data    interface{} `json:"data,omitempty"`
+}
+
+// Notification represents an MCP notification (no ID)
+type Notification struct {
+	JSONRPC string                 `json:"jsonrpc"`
+	Method  string                 `json:"method"`
+	Params  map[string]interface{} `json:"params,omitempty"`
+}
+
+// Server represents an MCP server
+type Server struct {
+	name        string
+	version     string
+	tools       map[string]*Tool
+	handlers    map[string]ToolHandler
+	input       io.Reader
+	output      io.Writer
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.RWMutex
+	initialized bool
+}
+
+// NewServer creates a new MCP server
+func NewServer(name, version string) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Server{
+		name:     name,
+		version:  version,
+		tools:    make(map[string]*Tool),
+		handlers: make(map[string]ToolHandler),
+		input:    os.Stdin,
+		output:   os.Stdout,
+		ctx:      ctx,
+		cancel:   cancel,
+	}
+}
+
+// AddTool registers a new tool with the server
+func (s *Server) AddTool(tool *Tool, handler ToolHandler) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	s.tools[tool.Name] = tool
+	s.handlers[tool.Name] = handler
+}
+
+// RemoveTool removes a tool from the server
+func (s *Server) RemoveTool(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	delete(s.tools, name)
+	delete(s.handlers, name)
+}
+
+// GetTools returns all registered tools
+func (s *Server) GetTools() []*Tool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	tools := make([]*Tool, 0, len(s.tools))
+	for _, tool := range s.tools {
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+// SetIO sets the input and output streams for the server
+func (s *Server) SetIO(input io.Reader, output io.Writer) {
+	s.input = input
+	s.output = output
+}
+
+// Run starts the MCP server
+func (s *Server) Run() error {
+	scanner := bufio.NewScanner(s.input)
+	
+	for scanner.Scan() {
+		select {
+		case <-s.ctx.Done():
+			return s.ctx.Err()
+		default:
+		}
+		
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+		
+		if err := s.handleMessage(line); err != nil {
+			log.Printf("Error handling message: %v", err)
+		}
+	}
+	
+	return scanner.Err()
+}
+
+// Stop stops the MCP server
+func (s *Server) Stop() {
+	s.cancel()
+}
+
+// handleMessage processes a single JSON-RPC message
+func (s *Server) handleMessage(line string) error {
+	var req Request
+	if err := json.Unmarshal([]byte(line), &req); err != nil {
+		return s.sendError(nil, -32700, "Parse error", err.Error())
+	}
+	
+	switch req.Method {
+	case "initialize":
+		return s.handleInitialize(&req)
+	case "initialized":
+		return s.handleInitialized(&req)
+	case "tools/list":
+		return s.handleToolsList(&req)
+	case "tools/call":
+		return s.handleToolsCall(&req)
+	case "ping":
+		return s.handlePing(&req)
+	default:
+		return s.sendError(req.ID, -32601, "Method not found", req.Method)
+	}
+}
+
+// handleInitialize handles the initialize request
+func (s *Server) handleInitialize(req *Request) error {
+	result := map[string]interface{}{
+		"protocolVersion": constants.MCPProtocolVersion,
+		"capabilities": map[string]interface{}{
+			"tools": map[string]interface{}{},
+		},
+		"serverInfo": map[string]interface{}{
+			"name":    s.name,
+			"version": s.version,
+		},
+	}
+	
+	return s.sendResponse(req.ID, result)
+}
+
+// handleInitialized handles the initialized notification
+func (s *Server) handleInitialized(req *Request) error {
+	s.mu.Lock()
+	s.initialized = true
+	s.mu.Unlock()
+	return nil
+}
+
+// handleToolsList handles the tools/list request
+func (s *Server) handleToolsList(req *Request) error {
+	s.mu.RLock()
+	tools := make([]*Tool, 0, len(s.tools))
+	for _, tool := range s.tools {
+		tools = append(tools, tool)
+	}
+	s.mu.RUnlock()
+	
+	result := map[string]interface{}{
+		"tools": tools,
+	}
+	
+	return s.sendResponse(req.ID, result)
+}
+
+// handleToolsCall handles the tools/call request
+func (s *Server) handleToolsCall(req *Request) error {
+	params, ok := req.Params["arguments"].(map[string]interface{})
+	if !ok {
+		params = make(map[string]interface{})
+	}
+	
+	name, ok := req.Params["name"].(string)
+	if !ok {
+		return s.sendError(req.ID, -32602, "Invalid params", "Missing tool name")
+	}
+	
+	s.mu.RLock()
+	handler, exists := s.handlers[name]
+	s.mu.RUnlock()
+	
+	if !exists {
+		return s.sendError(req.ID, -32602, "Invalid params", fmt.Sprintf("Tool not found: %s", name))
+	}
+	
+	result, err := handler(s.ctx, params)
+	if err != nil {
+		return s.sendError(req.ID, -32603, "Internal error", err.Error())
+	}
+	
+	response := map[string]interface{}{
+		"content": []map[string]interface{}{
+			{
+				"type": "text",
+				"text": result,
+			},
+		},
+	}
+	
+	return s.sendResponse(req.ID, response)
+}
+
+// handlePing handles the ping request
+func (s *Server) handlePing(req *Request) error {
+	result := map[string]interface{}{}
+	return s.sendResponse(req.ID, result)
+}
+
+// sendResponse sends a JSON-RPC response
+func (s *Server) sendResponse(id interface{}, result interface{}) error {
+	response := Response{
+		JSONRPC: "2.0",
+		ID:      id,
+		Result:  result,
+	}
+	
+	data, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	
+	_, err = fmt.Fprintf(s.output, "%s\n", data)
+	return err
+}
+
+// sendError sends a JSON-RPC error response
+func (s *Server) sendError(id interface{}, code int, message, data string) error {
+	response := Response{
+		JSONRPC: "2.0",
+		ID:      id,
+		Error: &Error{
+			Code:    code,
+			Message: message,
+			Data:    data,
+		},
+	}
+	
+	responseData, err := json.Marshal(response)
+	if err != nil {
+		return err
+	}
+	
+	_, err = fmt.Fprintf(s.output, "%s\n", responseData)
+	return err
+}
+
+// sendNotification sends a JSON-RPC notification
+func (s *Server) sendNotification(method string, params map[string]interface{}) error {
+	notification := Notification{
+		JSONRPC: "2.0",
+		Method:  method,
+		Params:  params,
+	}
+	
+	data, err := json.Marshal(notification)
+	if err != nil {
+		return err
+	}
+	
+	_, err = fmt.Fprintf(s.output, "%s\n", data)
+	return err
+}
