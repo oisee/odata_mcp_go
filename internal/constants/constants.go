@@ -1,6 +1,11 @@
 package constants
 
-import "fmt"
+import (
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+)
 
 // OData XML namespaces
 const (
@@ -182,10 +187,59 @@ func GetToolOperationName(operation string, shrink bool) string {
 
 // FormatServiceID extracts a service identifier from a service URL for tool naming
 func FormatServiceID(serviceURL string) string {
-	// Simple extraction - in a real implementation, this would be more sophisticated
-	// to match the Python version's service identification logic
-	if len(serviceURL) > 50 {
-		return "service"
+	// Pattern 1: SAP OData services like /sap/opu/odata/sap/ZODD_000_SRV
+	// Extract the service name and return a shortened version
+	if matches := regexp.MustCompile(`/([A-Z][A-Z0-9_]*_SRV)`).FindStringSubmatch(serviceURL); len(matches) > 1 {
+		svcName := matches[1]
+		// Extract compact form: take first char + first numbers found
+		if compactMatch := regexp.MustCompile(`^([A-Z])[A-Z]*_?(\d+)`).FindStringSubmatch(svcName); len(compactMatch) > 2 {
+			return fmt.Sprintf("%s%s", compactMatch[1], compactMatch[2])
+		}
+		// If no numbers, return first 8 chars
+		if len(svcName) > 8 {
+			return svcName[:8]
+		}
+		return svcName
 	}
-	return fmt.Sprintf("svc_%d", len(serviceURL)%1000)
+	
+	// Pattern 2: .svc endpoints like /MyService.svc -> MySvc
+	if matches := regexp.MustCompile(`/([A-Za-z][A-Za-z0-9_]+)\.svc`).FindStringSubmatch(serviceURL); len(matches) > 1 {
+		name := matches[1]
+		if len(name) > 5 {
+			return fmt.Sprintf("%sSvc", name[:5])
+		}
+		return fmt.Sprintf("%sSvc", name)
+	}
+	
+	// Pattern 3: Generic service name from path like /odata/TestService -> Test
+	if matches := regexp.MustCompile(`/odata/([A-Za-z][A-Za-z0-9_]+)`).FindStringSubmatch(serviceURL); len(matches) > 1 {
+		name := matches[1]
+		if len(name) > 8 {
+			return name[:8]
+		}
+		return name
+	}
+	
+	// Pattern 4: Extract last meaningful path segment
+	parsedURL, err := url.Parse(serviceURL)
+	if err == nil && parsedURL.Path != "" {
+		segments := strings.Split(parsedURL.Path, "/")
+		for i := len(segments) - 1; i >= 0; i-- {
+			seg := segments[i]
+			if seg != "" && seg != "api" && seg != "odata" && seg != "sap" && seg != "opu" {
+				cleanSeg := regexp.MustCompile(`[^a-zA-Z0-9_]`).ReplaceAllString(seg, "_")
+				cleanSeg = regexp.MustCompile(`_+`).ReplaceAllString(cleanSeg, "_")
+				cleanSeg = strings.Trim(cleanSeg, "_")
+				if len(cleanSeg) > 1 {
+					if len(cleanSeg) > 8 {
+						return cleanSeg[:8]
+					}
+					return cleanSeg
+				}
+			}
+		}
+	}
+	
+	// Ultimate fallback
+	return "od"
 }
