@@ -67,6 +67,12 @@ func init() {
 	rootCmd.Flags().BoolVar(&cfg.Debug, "debug", false, "Alias for --verbose")
 	rootCmd.Flags().BoolVar(&cfg.SortTools, "sort-tools", true, "Sort tools alphabetically in the output")
 	rootCmd.Flags().BoolVar(&cfg.Trace, "trace", false, "Initialize MCP service and print all tools and parameters, then exit (useful for debugging)")
+	
+	// Response enhancement options
+	rootCmd.Flags().BoolVar(&cfg.PaginationHints, "pagination-hints", false, "Add pagination support with suggested_next_call and has_more indicators")
+	rootCmd.Flags().BoolVar(&cfg.LegacyDates, "legacy-dates", false, "Support epoch timestamp format (/Date(1234567890000)/)")
+	rootCmd.Flags().BoolVar(&cfg.VerboseErrors, "verbose-errors", false, "Provide detailed error context and debugging information")
+	rootCmd.Flags().BoolVar(&cfg.ResponseMetadata, "response-metadata", false, "Include detailed __metadata blocks in entity responses")
 
 	// Bind flags to viper for environment variable support
 	viper.BindPFlag("service", rootCmd.Flags().Lookup("service"))

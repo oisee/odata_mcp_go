@@ -29,6 +29,12 @@ type Config struct {
 	Debug     bool `mapstructure:"debug"`
 	SortTools bool `mapstructure:"sort_tools"`
 	Trace     bool `mapstructure:"trace"`
+	
+	// Response enhancement options
+	PaginationHints  bool `mapstructure:"pagination_hints"`   // Add pagination support with hints
+	LegacyDates      bool `mapstructure:"legacy_dates"`       // Support epoch timestamp format
+	VerboseErrors    bool `mapstructure:"verbose_errors"`     // Detailed error context
+	ResponseMetadata bool `mapstructure:"response_metadata"`  // Include __metadata in responses
 }
 
 // HasBasicAuth returns true if username and password are configured

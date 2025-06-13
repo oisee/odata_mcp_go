@@ -94,6 +94,20 @@ type ODataResponse struct {
 	Value     interface{}            `json:"value,omitempty"`
 	Error     *ODataError            `json:"error,omitempty"`
 	Metadata  map[string]interface{} `json:"@odata.metadata,omitempty"`
+	
+	// Alternative format for Python-style responses
+	Results    interface{}       `json:"results,omitempty"`
+	Pagination *PaginationInfo   `json:"pagination,omitempty"`
+}
+
+// PaginationInfo provides pagination details like Python implementation
+type PaginationInfo struct {
+	TotalCount        *int64  `json:"total_count,omitempty"`
+	CurrentCount      int     `json:"current_count"`
+	HasMore           bool    `json:"has_more"`
+	SuggestedNextCall *string `json:"suggested_next_call,omitempty"`
+	Skip              int     `json:"skip,omitempty"`
+	Top               int     `json:"top,omitempty"`
 }
 
 // ToolInfo represents information about a generated MCP tool

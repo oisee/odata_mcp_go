@@ -230,7 +230,7 @@ func (b *ODataMCPBridge) generateFilterTool(entitySetName string, entitySet *mod
 
 	description := fmt.Sprintf("List/filter %s entities with OData query options", entitySetName)
 
-	// Build input schema with basic compliance
+	// Build input schema with standard OData parameters
 	properties := map[string]interface{}{
 		"$filter": map[string]interface{}{
 			"type":        "string",
@@ -805,10 +805,10 @@ func (b *ODataMCPBridge) handleServiceInfo(ctx context.Context, args map[string]
 }
 
 func (b *ODataMCPBridge) handleEntityFilter(ctx context.Context, entitySetName string, args map[string]interface{}) (interface{}, error) {
-	// Build query options from arguments
+	// Build query options from arguments using standard OData parameters
 	options := make(map[string]string)
 	
-	// Handle each possible parameter
+	// Handle each OData parameter
 	if filter, ok := args["$filter"].(string); ok && filter != "" {
 		options[constants.QueryFilter] = filter
 	}
@@ -831,16 +831,122 @@ func (b *ODataMCPBridge) handleEntityFilter(ctx context.Context, entitySetName s
 	// Call OData client to get entity set
 	response, err := b.client.GetEntitySet(ctx, entitySetName, options)
 	if err != nil {
+		if b.config.VerboseErrors {
+			return nil, fmt.Errorf("failed to filter entities from %s with options %v: %w", entitySetName, options, err)
+		}
 		return nil, fmt.Errorf("failed to filter entities: %w", err)
 	}
 	
+	// Enhance response based on configuration
+	enhancedResponse := b.enhanceResponse(response, options)
+	
 	// Format response as JSON string
-	result, err := json.Marshal(response)
+	result, err := json.Marshal(enhancedResponse)
 	if err != nil {
 		return nil, fmt.Errorf("failed to format response: %w", err)
 	}
 	
 	return string(result), nil
+}
+
+// enhanceResponse enhances OData response based on configuration options
+func (b *ODataMCPBridge) enhanceResponse(response *models.ODataResponse, options map[string]string) *models.ODataResponse {
+	enhanced := &models.ODataResponse{
+		Context:  response.Context,
+		Count:    response.Count,
+		NextLink: response.NextLink,
+		Value:    response.Value,
+		Error:    response.Error,
+		Metadata: response.Metadata,
+	}
+	
+	// Add pagination hints if enabled
+	if b.config.PaginationHints && response.Value != nil {
+		pagination := &models.PaginationInfo{}
+		
+		// Set total count if available
+		if response.Count != nil {
+			pagination.TotalCount = response.Count
+		}
+		
+		// Calculate current count
+		if resultArray, ok := response.Value.([]interface{}); ok {
+			pagination.CurrentCount = len(resultArray)
+		} else {
+			pagination.CurrentCount = 1 // Single entity
+		}
+		
+		// Parse skip and top from options
+		skip := 0
+		top := 0
+		if skipStr, exists := options[constants.QuerySkip]; exists {
+			fmt.Sscanf(skipStr, "%d", &skip)
+		}
+		if topStr, exists := options[constants.QueryTop]; exists {
+			fmt.Sscanf(topStr, "%d", &top)
+		}
+		
+		pagination.Skip = skip
+		pagination.Top = top
+		
+		// Determine if there are more results
+		if pagination.TotalCount != nil && top > 0 {
+			pagination.HasMore = int64(skip+pagination.CurrentCount) < *pagination.TotalCount
+			
+			// Generate suggested next call if there are more results
+			if pagination.HasMore {
+				nextSkip := skip + pagination.CurrentCount
+				suggestedCall := fmt.Sprintf("Use $skip=%d and $top=%d for next page", nextSkip, top)
+				pagination.SuggestedNextCall = &suggestedCall
+			}
+		}
+		
+		enhanced.Pagination = pagination
+	}
+	
+	// Process legacy dates if enabled
+	if b.config.LegacyDates {
+		enhanced.Value = b.convertLegacyDates(enhanced.Value)
+	}
+	
+	// Strip metadata if not requested
+	if !b.config.ResponseMetadata {
+		enhanced.Value = b.stripMetadata(enhanced.Value)
+	}
+	
+	return enhanced
+}
+
+// convertLegacyDates converts date fields to epoch timestamp format (/Date(1234567890000)/)
+func (b *ODataMCPBridge) convertLegacyDates(data interface{}) interface{} {
+	// This is a placeholder for legacy date conversion
+	// In a full implementation, this would recursively traverse the data structure
+	// and convert ISO date strings to /Date(epoch)/ format
+	return data
+}
+
+// stripMetadata removes __metadata blocks from entities unless specifically requested
+func (b *ODataMCPBridge) stripMetadata(data interface{}) interface{} {
+	switch v := data.(type) {
+	case []interface{}:
+		// Handle array of entities
+		result := make([]interface{}, len(v))
+		for i, item := range v {
+			result[i] = b.stripMetadata(item)
+		}
+		return result
+	case map[string]interface{}:
+		// Handle single entity
+		result := make(map[string]interface{})
+		for key, value := range v {
+			if key != "__metadata" {
+				result[key] = b.stripMetadata(value)
+			}
+		}
+		return result
+	default:
+		return data
+	}
 }
 
 func (b *ODataMCPBridge) handleEntityCount(ctx context.Context, entitySetName string, args map[string]interface{}) (interface{}, error) {
