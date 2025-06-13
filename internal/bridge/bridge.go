@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 
@@ -79,21 +80,35 @@ func (b *ODataMCPBridge) initialize() error {
 
 // generateTools creates MCP tools based on metadata
 func (b *ODataMCPBridge) generateTools() error {
-	// Generate service info tool
+	// 1. Generate service info tool first
 	b.generateServiceInfoTool()
 
-	// Generate entity set tools
-	for name, entitySet := range b.metadata.EntitySets {
+	// 2. Generate entity set tools in alphabetical order
+	entityNames := make([]string, 0, len(b.metadata.EntitySets))
+	for name := range b.metadata.EntitySets {
 		if b.shouldIncludeEntity(name) {
-			b.generateEntitySetTools(name, entitySet)
+			entityNames = append(entityNames, name)
 		}
 	}
+	sort.Strings(entityNames)
+	
+	for _, name := range entityNames {
+		entitySet := b.metadata.EntitySets[name]
+		b.generateEntitySetTools(name, entitySet)
+	}
 
-	// Generate function import tools
-	for name, function := range b.metadata.FunctionImports {
+	// 3. Generate function import tools in alphabetical order
+	functionNames := make([]string, 0, len(b.metadata.FunctionImports))
+	for name := range b.metadata.FunctionImports {
 		if b.shouldIncludeFunction(name) {
-			b.generateFunctionTool(name, function)
+			functionNames = append(functionNames, name)
 		}
+	}
+	sort.Strings(functionNames)
+	
+	for _, name := range functionNames {
+		function := b.metadata.FunctionImports[name]
+		b.generateFunctionTool(name, function)
 	}
 
 	return nil
@@ -860,6 +875,9 @@ func (b *ODataMCPBridge) enhanceResponse(response *models.ODataResponse, options
 		Metadata: response.Metadata,
 	}
 	
+	// Apply size limits first to prevent large responses
+	enhanced = b.applySizeLimits(enhanced)
+	
 	// Add pagination hints if enabled
 	if b.config.PaginationHints && response.Value != nil {
 		pagination := &models.PaginationInfo{}
@@ -915,6 +933,88 @@ func (b *ODataMCPBridge) enhanceResponse(response *models.ODataResponse, options
 	}
 	
 	return enhanced
+}
+
+// applySizeLimits enforces response size and item count limits
+func (b *ODataMCPBridge) applySizeLimits(response *models.ODataResponse) *models.ODataResponse {
+	if response.Value == nil {
+		return response
+	}
+	
+	// Apply item count limit
+	if b.config.MaxItems > 0 {
+		if resultArray, ok := response.Value.([]interface{}); ok {
+			if len(resultArray) > b.config.MaxItems {
+				// Truncate to max items and add warning
+				truncated := resultArray[:b.config.MaxItems]
+				
+				// Update response
+				newResponse := &models.ODataResponse{
+					Context:  response.Context,
+					Count:    response.Count,
+					NextLink: response.NextLink,
+					Value:    truncated,
+					Error:    response.Error,
+					Metadata: response.Metadata,
+				}
+				
+				// Add truncation warning
+				if newResponse.Metadata == nil {
+					newResponse.Metadata = make(map[string]interface{})
+				}
+				newResponse.Metadata["truncated"] = true
+				newResponse.Metadata["original_count"] = len(resultArray)
+				newResponse.Metadata["max_items"] = b.config.MaxItems
+				newResponse.Metadata["warning"] = fmt.Sprintf("Response truncated from %d to %d items due to size limits", len(resultArray), b.config.MaxItems)
+				
+				return newResponse
+			}
+		}
+	}
+	
+	// Apply response size limit
+	if b.config.MaxResponseSize > 0 {
+		// Estimate response size by marshaling to JSON
+		jsonData, err := json.Marshal(response.Value)
+		if err == nil && len(jsonData) > b.config.MaxResponseSize {
+			// If it's an array, try to reduce items
+			if resultArray, ok := response.Value.([]interface{}); ok {
+				// Calculate how many items we can fit
+				avgItemSize := len(jsonData) / len(resultArray)
+				maxItems := b.config.MaxResponseSize / avgItemSize
+				if maxItems < 1 {
+					maxItems = 1
+				}
+				
+				// Truncate to fit size limit
+				truncated := resultArray[:maxItems]
+				
+				// Update response
+				newResponse := &models.ODataResponse{
+					Context:  response.Context,
+					Count:    response.Count,
+					NextLink: response.NextLink,
+					Value:    truncated,
+					Error:    response.Error,
+					Metadata: response.Metadata,
+				}
+				
+				// Add truncation warning
+				if newResponse.Metadata == nil {
+					newResponse.Metadata = make(map[string]interface{})
+				}
+				newResponse.Metadata["truncated"] = true
+				newResponse.Metadata["original_count"] = len(resultArray)
+				newResponse.Metadata["truncated_count"] = len(truncated)
+				newResponse.Metadata["max_response_size"] = b.config.MaxResponseSize
+				newResponse.Metadata["warning"] = fmt.Sprintf("Response truncated from %d to %d items due to response size limit (%d bytes)", len(resultArray), len(truncated), b.config.MaxResponseSize)
+				
+				return newResponse
+			}
+		}
+	}
+	
+	return response
 }
 
 // convertLegacyDates converts date fields to epoch timestamp format (/Date(1234567890000)/)

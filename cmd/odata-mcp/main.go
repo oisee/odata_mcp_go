@@ -74,6 +74,10 @@ func init() {
 	rootCmd.Flags().BoolVar(&cfg.LegacyDates, "legacy-dates", false, "Support epoch timestamp format (/Date(1234567890000)/)")
 	rootCmd.Flags().BoolVar(&cfg.VerboseErrors, "verbose-errors", false, "Provide detailed error context and debugging information")
 	rootCmd.Flags().BoolVar(&cfg.ResponseMetadata, "response-metadata", false, "Include detailed __metadata blocks in entity responses")
+	
+	// Response size limits
+	rootCmd.Flags().IntVar(&cfg.MaxResponseSize, "max-response-size", 5*1024*1024, "Maximum response size in bytes (default: 5MB)")
+	rootCmd.Flags().IntVar(&cfg.MaxItems, "max-items", 100, "Maximum number of items in response (default: 100)")
 
 	// Bind flags to viper for environment variable support
 	viper.BindPFlag("service", rootCmd.Flags().Lookup("service"))

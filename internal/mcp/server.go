@@ -58,6 +58,7 @@ type Server struct {
 	name        string
 	version     string
 	tools       map[string]*Tool
+	toolOrder   []string    // Maintains insertion order
 	handlers    map[string]ToolHandler
 	input       io.Reader
 	output      io.Writer
@@ -73,8 +74,9 @@ func NewServer(name, version string) *Server {
 	return &Server{
 		name:     name,
 		version:  version,
-		tools:    make(map[string]*Tool),
-		handlers: make(map[string]ToolHandler),
+		tools:     make(map[string]*Tool),
+		toolOrder: make([]string, 0),
+		handlers:  make(map[string]ToolHandler),
 		input:    os.Stdin,
 		output:   os.Stdout,
 		ctx:      ctx,
@@ -87,6 +89,11 @@ func (s *Server) AddTool(tool *Tool, handler ToolHandler) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	
+	// Only add to order if it's a new tool
+	if _, exists := s.tools[tool.Name]; !exists {
+		s.toolOrder = append(s.toolOrder, tool.Name)
+	}
+	
 	s.tools[tool.Name] = tool
 	s.handlers[tool.Name] = handler
 }
@@ -98,16 +105,26 @@ func (s *Server) RemoveTool(name string) {
 	
 	delete(s.tools, name)
 	delete(s.handlers, name)
+	
+	// Remove from order slice
+	for i, toolName := range s.toolOrder {
+		if toolName == name {
+			s.toolOrder = append(s.toolOrder[:i], s.toolOrder[i+1:]...)
+			break
+		}
+	}
 }
 
-// GetTools returns all registered tools
+// GetTools returns all registered tools in insertion order
 func (s *Server) GetTools() []*Tool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	
 	tools := make([]*Tool, 0, len(s.tools))
-	for _, tool := range s.tools {
-		tools = append(tools, tool)
+	for _, name := range s.toolOrder {
+		if tool, exists := s.tools[name]; exists {
+			tools = append(tools, tool)
+		}
 	}
 	return tools
 }
@@ -220,8 +237,11 @@ func (s *Server) handleInitialized(req *Request) error {
 func (s *Server) handleToolsList(req *Request) error {
 	s.mu.RLock()
 	tools := make([]*Tool, 0, len(s.tools))
-	for _, tool := range s.tools {
-		tools = append(tools, tool)
+	// Use the ordered list to maintain insertion order
+	for _, name := range s.toolOrder {
+		if tool, exists := s.tools[name]; exists {
+			tools = append(tools, tool)
+		}
 	}
 	s.mu.RUnlock()
 	

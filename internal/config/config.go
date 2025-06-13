@@ -35,6 +35,10 @@ type Config struct {
 	LegacyDates      bool `mapstructure:"legacy_dates"`       // Support epoch timestamp format
 	VerboseErrors    bool `mapstructure:"verbose_errors"`     // Detailed error context
 	ResponseMetadata bool `mapstructure:"response_metadata"`  // Include __metadata in responses
+	
+	// Response size limits
+	MaxResponseSize int `mapstructure:"max_response_size"` // Maximum response size in bytes
+	MaxItems        int `mapstructure:"max_items"`         // Maximum number of items in response
 }
 
 // HasBasicAuth returns true if username and password are configured
