@@ -119,6 +119,7 @@ func (c *ODataClient) doRequest(req *http.Request) (*http.Response, error) {
 
 // fetchCSRFToken fetches a CSRF token from the service
 func (c *ODataClient) fetchCSRFToken(ctx context.Context) error {
+	// Use service root for CSRF token fetching (more reliable than empty string)
 	req, err := c.buildRequest(ctx, constants.GET, "", nil)
 	if err != nil {
 		return err
@@ -126,27 +127,45 @@ func (c *ODataClient) fetchCSRFToken(ctx context.Context) error {
 
 	req.Header.Set(constants.CSRFTokenHeader, constants.CSRFTokenFetch)
 
-	resp, err := c.httpClient.Do(req)
+	// Use doRequest to ensure proper authentication and error handling
+	resp, err := c.doRequest(req)
 	if err != nil {
 		return fmt.Errorf("CSRF token request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Check both possible header names (case variations)
 	token := resp.Header.Get(constants.CSRFTokenHeader)
 	if token == "" {
 		token = resp.Header.Get(constants.CSRFTokenHeaderLower)
 	}
 
+	// Additional header variations that some SAP systems use
 	if token == "" {
+		token = resp.Header.Get("x-csrf-token")
+	}
+	if token == "" {
+		token = resp.Header.Get("X-Csrf-Token")
+	}
+
+	if token == "" || token == constants.CSRFTokenFetch {
 		return fmt.Errorf("CSRF token not found in response headers")
 	}
 
 	c.csrfToken = token
 	if c.verbose {
-		fmt.Fprintf(os.Stderr, "[VERBOSE] CSRF token fetched successfully\n")
+		fmt.Fprintf(os.Stderr, "[VERBOSE] CSRF token fetched successfully: %s...\n", token[:min(len(token), 20)])
 	}
 
 	return nil
+}
+
+// Helper function for min
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 // GetMetadata fetches and parses the OData service metadata
@@ -258,9 +277,23 @@ func (c *ODataClient) GetEntity(ctx context.Context, entitySet string, key map[s
 
 // CreateEntity creates a new entity
 func (c *ODataClient) CreateEntity(ctx context.Context, entitySet string, data map[string]interface{}) (*models.ODataResponse, error) {
+	// Proactively fetch CSRF token for POST operations
+	if c.csrfToken == "" {
+		if err := c.fetchCSRFToken(ctx); err != nil {
+			if c.verbose {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token: %v\n", err)
+			}
+			// Continue without token - some services might not require it
+		}
+	}
+
 	jsonData, err := json.Marshal(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal entity data: %w", err)
+	}
+
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Creating entity with data: %s\n", string(jsonData))
 	}
 
 	req, err := c.buildRequest(ctx, constants.POST, entitySet, bytes.NewReader(jsonData))
@@ -269,6 +302,8 @@ func (c *ODataClient) CreateEntity(ctx context.Context, entitySet string, data m
 	}
 
 	req.Header.Set(constants.ContentType, constants.ContentTypeJSON)
+	// Explicitly set content length to avoid any body length issues
+	req.ContentLength = int64(len(jsonData))
 
 	resp, err := c.doRequest(req)
 	if err != nil {
@@ -281,6 +316,16 @@ func (c *ODataClient) CreateEntity(ctx context.Context, entitySet string, data m
 
 // UpdateEntity updates an existing entity
 func (c *ODataClient) UpdateEntity(ctx context.Context, entitySet string, key map[string]interface{}, data map[string]interface{}, method string) (*models.ODataResponse, error) {
+	// Proactively fetch CSRF token for update operations
+	if c.csrfToken == "" {
+		if err := c.fetchCSRFToken(ctx); err != nil {
+			if c.verbose {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token: %v\n", err)
+			}
+			// Continue without token - some services might not require it
+		}
+	}
+
 	keyPredicate := c.buildKeyPredicate(key)
 	endpoint := fmt.Sprintf("%s(%s)", entitySet, keyPredicate)
 
@@ -293,12 +338,18 @@ func (c *ODataClient) UpdateEntity(ctx context.Context, entitySet string, key ma
 		method = constants.PUT
 	}
 
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Updating entity with data: %s\n", string(jsonData))
+	}
+
 	req, err := c.buildRequest(ctx, method, endpoint, bytes.NewReader(jsonData))
 	if err != nil {
 		return nil, err
 	}
 
 	req.Header.Set(constants.ContentType, constants.ContentTypeJSON)
+	// Explicitly set content length to avoid any body length issues
+	req.ContentLength = int64(len(jsonData))
 
 	resp, err := c.doRequest(req)
 	if err != nil {
@@ -311,6 +362,16 @@ func (c *ODataClient) UpdateEntity(ctx context.Context, entitySet string, key ma
 
 // DeleteEntity deletes an entity
 func (c *ODataClient) DeleteEntity(ctx context.Context, entitySet string, key map[string]interface{}) (*models.ODataResponse, error) {
+	// Proactively fetch CSRF token for delete operations
+	if c.csrfToken == "" {
+		if err := c.fetchCSRFToken(ctx); err != nil {
+			if c.verbose {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token: %v\n", err)
+			}
+			// Continue without token - some services might not require it
+		}
+	}
+
 	keyPredicate := c.buildKeyPredicate(key)
 	endpoint := fmt.Sprintf("%s(%s)", entitySet, keyPredicate)
 
@@ -346,14 +407,31 @@ func (c *ODataClient) CallFunction(ctx context.Context, functionName string, par
 		}
 		req, err = c.buildRequest(ctx, constants.GET, endpoint, nil)
 	} else {
+		// Proactively fetch CSRF token for POST function calls
+		if c.csrfToken == "" {
+			if err := c.fetchCSRFToken(ctx); err != nil {
+				if c.verbose {
+					fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token: %v\n", err)
+				}
+				// Continue without token - some services might not require it
+			}
+		}
+
 		// For POST requests, send parameters in body
 		jsonData, marshalErr := json.Marshal(parameters)
 		if marshalErr != nil {
 			return nil, fmt.Errorf("failed to marshal function parameters: %w", marshalErr)
 		}
+
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Calling function with data: %s\n", string(jsonData))
+		}
+
 		req, err = c.buildRequest(ctx, constants.POST, endpoint, bytes.NewReader(jsonData))
 		if err == nil {
 			req.Header.Set(constants.ContentType, constants.ContentTypeJSON)
+			// Explicitly set content length to avoid any body length issues
+			req.ContentLength = int64(len(jsonData))
 		}
 	}
 
@@ -515,11 +593,61 @@ func (c *ODataClient) parseErrorFromBody(body []byte, statusCode int) error {
 	}
 
 	if err := json.Unmarshal(body, &errorResp); err == nil && errorResp.Error != nil {
-		return fmt.Errorf("OData error: %s", errorResp.Error.Message)
+		return c.buildDetailedError(errorResp.Error, statusCode, body)
 	}
 
 	// Fallback to generic error
 	return fmt.Errorf("HTTP %d: %s", statusCode, string(body))
+}
+
+// buildDetailedError creates a comprehensive error message from OData error details
+func (c *ODataClient) buildDetailedError(odataErr *models.ODataError, statusCode int, rawBody []byte) error {
+	var errMsg strings.Builder
+	
+	// Start with basic error info
+	errMsg.WriteString(fmt.Sprintf("OData error (HTTP %d)", statusCode))
+	
+	// Add error code if available
+	if odataErr.Code != "" {
+		errMsg.WriteString(fmt.Sprintf(" [%s]", odataErr.Code))
+	}
+	
+	// Add main message
+	errMsg.WriteString(fmt.Sprintf(": %s", odataErr.Message))
+	
+	// Add target if available (which field/entity caused the error)
+	if odataErr.Target != "" {
+		errMsg.WriteString(fmt.Sprintf(" (target: %s)", odataErr.Target))
+	}
+	
+	// Add severity if available
+	if odataErr.Severity != "" {
+		errMsg.WriteString(fmt.Sprintf(" [severity: %s]", odataErr.Severity))
+	}
+	
+	// Add details if available
+	if len(odataErr.Details) > 0 {
+		errMsg.WriteString(" | Details: ")
+		for i, detail := range odataErr.Details {
+			if i > 0 {
+				errMsg.WriteString("; ")
+			}
+			errMsg.WriteString(detail.Message)
+			if detail.Target != "" {
+				errMsg.WriteString(fmt.Sprintf(" (target: %s)", detail.Target))
+			}
+		}
+	}
+	
+	// Add inner error info if available and verbose mode is on
+	if c.verbose && len(odataErr.InnerError) > 0 {
+		errMsg.WriteString(" | Inner error: ")
+		if innerErrBytes, err := json.Marshal(odataErr.InnerError); err == nil {
+			errMsg.WriteString(string(innerErrBytes))
+		}
+	}
+	
+	return fmt.Errorf(errMsg.String())
 }
 
 // optimizeResponse applies optimizations to the response

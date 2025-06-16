@@ -18,3 +18,5 @@ coverage/*
 *.bak
 *.swp
 .claude/*
+.claude/
+claude.*

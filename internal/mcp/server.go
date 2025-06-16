@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/odata-mcp/go/internal/constants"
@@ -274,7 +275,9 @@ func (s *Server) handleToolsCall(req *Request) error {
 	
 	result, err := handler(s.ctx, params)
 	if err != nil {
-		return s.sendError(req.ID, -32603, "Internal error", err.Error())
+		// Map OData errors to appropriate MCP error codes and provide detailed context
+		errorCode, errorMessage, errorData := s.categorizeError(err, name)
+		return s.sendError(req.ID, errorCode, errorMessage, errorData)
 	}
 	
 	response := map[string]interface{}{
@@ -331,6 +334,70 @@ func (s *Server) sendError(id interface{}, code int, message, data string) error
 	
 	_, err = fmt.Fprintf(s.output, "%s\n", responseData)
 	return err
+}
+
+// categorizeError maps OData errors to appropriate MCP error codes and enhances error messages
+func (s *Server) categorizeError(err error, toolName string) (int, string, string) {
+	errStr := err.Error()
+	
+	// Create a comprehensive error message that includes both context and details
+	// The MCP client will see this as the main error message
+	fullErrorMessage := fmt.Sprintf("OData MCP tool '%s' failed: %s", toolName, errStr)
+	
+	// Create structured data for programmatic use (though most clients ignore this)
+	errorData := fmt.Sprintf("{\"tool\":\"%s\",\"original_error\":\"%s\"}", toolName, errStr)
+	
+	// Check for specific OData error patterns and map to appropriate MCP codes
+	switch {
+	case strings.Contains(errStr, "HTTP 400") || strings.Contains(errStr, "Bad Request"):
+		return -32602, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 401") || strings.Contains(errStr, "Unauthorized"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 403") || strings.Contains(errStr, "Forbidden"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 404") || strings.Contains(errStr, "Not Found"):
+		return -32602, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 409") || strings.Contains(errStr, "Conflict"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 422") || strings.Contains(errStr, "Unprocessable"):
+		return -32602, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 429") || strings.Contains(errStr, "Too Many Requests"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 500") || strings.Contains(errStr, "Internal Server Error"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 502") || strings.Contains(errStr, "Bad Gateway"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "HTTP 503") || strings.Contains(errStr, "Service Unavailable"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "CSRF token"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "connection refused") || strings.Contains(errStr, "network"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "invalid metadata") || strings.Contains(errStr, "metadata"):
+		return -32603, fullErrorMessage, errorData
+		
+	case strings.Contains(errStr, "invalid entity") || strings.Contains(errStr, "entity not found"):
+		return -32602, fullErrorMessage, errorData
+		
+	default:
+		// Generic internal error with full context
+		return -32603, fullErrorMessage, errorData
+	}
 }
 
 // sendNotification sends a JSON-RPC notification

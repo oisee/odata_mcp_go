@@ -70,6 +70,7 @@ build-windows: deps
 	@mkdir -p $(BUILD_DIR)
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) $(GCFLAGS) $(ASMFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe $(MAIN_PATH)
 	@echo "✅ Windows build complete: $(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe"
+	rm -f "/mnt/c/bin/$(BINARY_NAME).exe" 2>/dev/null || true
 	cp "$(BUILD_DIR)/$(BINARY_NAME)-windows-amd64.exe" "/mnt/c/bin/$(BINARY_NAME).exe"
 
 .PHONY: build-macos
