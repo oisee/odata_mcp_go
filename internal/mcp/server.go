@@ -215,7 +215,9 @@ func (s *Server) handleInitialize(req *Request) error {
 	result := map[string]interface{}{
 		"protocolVersion": constants.MCPProtocolVersion,
 		"capabilities": map[string]interface{}{
-			"tools": map[string]interface{}{},
+			"tools": map[string]interface{}{
+				"listChanged": true,
+			},
 		},
 		"serverInfo": map[string]interface{}{
 			"name":    s.name,

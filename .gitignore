@@ -20,3 +20,4 @@ coverage/*
 .claude/*
 .claude/
 claude.*
+.*
