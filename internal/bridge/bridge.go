@@ -978,13 +978,20 @@ func (b *ODataMCPBridge) applySizeLimits(response *models.ODataResponse) *models
 		jsonData, err := json.Marshal(response.Value)
 		if err == nil && len(jsonData) > b.config.MaxResponseSize {
 			// If it's an array, try to reduce items
-			if resultArray, ok := response.Value.([]interface{}); ok {
-				// Calculate how many items we can fit
-				avgItemSize := len(jsonData) / len(resultArray)
-				maxItems := b.config.MaxResponseSize / avgItemSize
-				if maxItems < 1 {
-					maxItems = 1
-				}
+                       if resultArray, ok := response.Value.([]interface{}); ok {
+                               if len(resultArray) == 0 {
+                                       return response
+                               }
+
+                               // Calculate how many items we can fit
+                               avgItemSize := len(jsonData) / len(resultArray)
+                               if avgItemSize == 0 {
+                                       return response
+                               }
+                               maxItems := b.config.MaxResponseSize / avgItemSize
+                               if maxItems < 1 {
+                                       maxItems = 1
+                               }
 				
 				// Truncate to fit size limit
 				truncated := resultArray[:maxItems]
