@@ -84,6 +84,14 @@ func (c *ODataClient) buildRequest(ctx context.Context, method, endpoint string,
 	// Set CSRF token if available
 	if c.csrfToken != "" {
 		req.Header.Set(constants.CSRFTokenHeader, c.csrfToken)
+		if c.verbose {
+			// Show first 20 chars of token like Python does
+			tokenPreview := c.csrfToken
+			if len(tokenPreview) > 20 {
+				tokenPreview = tokenPreview[:20] + "..."
+			}
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Adding CSRF token to request: %s\n", tokenPreview)
+		}
 	}
 
 	return req, nil
@@ -91,8 +99,30 @@ func (c *ODataClient) buildRequest(ctx context.Context, method, endpoint string,
 
 // doRequest executes an HTTP request and handles common errors
 func (c *ODataClient) doRequest(req *http.Request) (*http.Response, error) {
+	// For requests with body, we need to save it for potential retry
+	var bodyBytes []byte
+	if req.Body != nil && req.ContentLength > 0 {
+		var err error
+		bodyBytes, err = io.ReadAll(req.Body)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+	}
+	
+	return c.doRequestWithRetry(req, bodyBytes, false)
+}
+
+// doRequestWithRetry executes an HTTP request with CSRF retry logic
+func (c *ODataClient) doRequestWithRetry(req *http.Request, bodyBytes []byte, isRetry bool) (*http.Response, error) {
 	if c.verbose {
 		fmt.Fprintf(os.Stderr, "[VERBOSE] %s %s\n", req.Method, req.URL.String())
+	}
+
+	// Reset body if we have it (for retry scenarios)
+	if bodyBytes != nil && len(bodyBytes) > 0 {
+		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+		req.ContentLength = int64(len(bodyBytes))
 	}
 
 	resp, err := c.httpClient.Do(req)
@@ -100,18 +130,51 @@ func (c *ODataClient) doRequest(req *http.Request) (*http.Response, error) {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 
-	// Handle CSRF token requirement (SAP-specific)
-	if resp.StatusCode == http.StatusForbidden && c.csrfToken == "" {
-		resp.Body.Close()
-		
-		// Try to fetch CSRF token
-		if err := c.fetchCSRFToken(req.Context()); err != nil {
-			return nil, fmt.Errorf("failed to fetch CSRF token: %w", err)
+	// Check if this is a modifying operation
+	modifyingMethods := []string{"POST", "PUT", "MERGE", "PATCH", "DELETE"}
+	isModifying := false
+	for _, m := range modifyingMethods {
+		if req.Method == m {
+			isModifying = true
+			break
 		}
+	}
 
-		// Retry original request with CSRF token
-		req.Header.Set(constants.CSRFTokenHeader, c.csrfToken)
-		return c.doRequest(req)
+	// Handle CSRF token validation failure (Python-style)
+	if resp.StatusCode == http.StatusForbidden && isModifying && !isRetry {
+		// Read response body to check for CSRF-related errors
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		bodyStr := string(body)
+		
+		csrfFailed := strings.Contains(bodyStr, "CSRF token validation failed") ||
+			strings.Contains(strings.ToLower(bodyStr), "csrf") ||
+			strings.EqualFold(resp.Header.Get("x-csrf-token"), "required")
+		
+		if csrfFailed {
+			if c.verbose {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] CSRF token validation failed, attempting to refetch...\n")
+			}
+			
+			// Clear the invalid token
+			c.csrfToken = ""
+			
+			// Try to fetch new CSRF token
+			if err := c.fetchCSRFToken(req.Context()); err != nil {
+				// Return original error with CSRF context
+				return nil, fmt.Errorf("CSRF token required but refetch failed. Status: %d. Response: %s", resp.StatusCode, bodyStr)
+			}
+
+			// Retry original request with new CSRF token
+			req.Header.Set(constants.CSRFTokenHeader, c.csrfToken)
+			if c.verbose {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Retrying request with new CSRF token...\n")
+			}
+			return c.doRequestWithRetry(req, bodyBytes, true)
+		}
+		
+		// Not a CSRF error, recreate response with body
+		resp.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
 	return resp, nil
@@ -119,6 +182,13 @@ func (c *ODataClient) doRequest(req *http.Request) (*http.Response, error) {
 
 // fetchCSRFToken fetches a CSRF token from the service
 func (c *ODataClient) fetchCSRFToken(ctx context.Context) error {
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Fetching CSRF token...\n")
+	}
+	
+	// Clear any existing CSRF token (Python behavior)
+	c.csrfToken = ""
+	
 	// Use service root for CSRF token fetching (more reliable than empty string)
 	req, err := c.buildRequest(ctx, constants.GET, "", nil)
 	if err != nil {
@@ -277,14 +347,12 @@ func (c *ODataClient) GetEntity(ctx context.Context, entitySet string, key map[s
 
 // CreateEntity creates a new entity
 func (c *ODataClient) CreateEntity(ctx context.Context, entitySet string, data map[string]interface{}) (*models.ODataResponse, error) {
-	// Proactively fetch CSRF token for POST operations
-	if c.csrfToken == "" {
-		if err := c.fetchCSRFToken(ctx); err != nil {
-			if c.verbose {
-				fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token: %v\n", err)
-			}
-			// Continue without token - some services might not require it
+	// Always fetch a fresh CSRF token for modifying operations (Python behavior)
+	if err := c.fetchCSRFToken(ctx); err != nil {
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token, proceeding without it: %v\n", err)
 		}
+		// Continue without token - some services might not require it
 	}
 
 	jsonData, err := json.Marshal(data)
@@ -316,14 +384,12 @@ func (c *ODataClient) CreateEntity(ctx context.Context, entitySet string, data m
 
 // UpdateEntity updates an existing entity
 func (c *ODataClient) UpdateEntity(ctx context.Context, entitySet string, key map[string]interface{}, data map[string]interface{}, method string) (*models.ODataResponse, error) {
-	// Proactively fetch CSRF token for update operations
-	if c.csrfToken == "" {
-		if err := c.fetchCSRFToken(ctx); err != nil {
-			if c.verbose {
-				fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token: %v\n", err)
-			}
-			// Continue without token - some services might not require it
+	// Always fetch a fresh CSRF token for modifying operations (Python behavior)
+	if err := c.fetchCSRFToken(ctx); err != nil {
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token, proceeding without it: %v\n", err)
 		}
+		// Continue without token - some services might not require it
 	}
 
 	keyPredicate := c.buildKeyPredicate(key)
@@ -362,14 +428,12 @@ func (c *ODataClient) UpdateEntity(ctx context.Context, entitySet string, key ma
 
 // DeleteEntity deletes an entity
 func (c *ODataClient) DeleteEntity(ctx context.Context, entitySet string, key map[string]interface{}) (*models.ODataResponse, error) {
-	// Proactively fetch CSRF token for delete operations
-	if c.csrfToken == "" {
-		if err := c.fetchCSRFToken(ctx); err != nil {
-			if c.verbose {
-				fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token: %v\n", err)
-			}
-			// Continue without token - some services might not require it
+	// Always fetch a fresh CSRF token for modifying operations (Python behavior)
+	if err := c.fetchCSRFToken(ctx); err != nil {
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token, proceeding without it: %v\n", err)
 		}
+		// Continue without token - some services might not require it
 	}
 
 	keyPredicate := c.buildKeyPredicate(key)
@@ -407,14 +471,12 @@ func (c *ODataClient) CallFunction(ctx context.Context, functionName string, par
 		}
 		req, err = c.buildRequest(ctx, constants.GET, endpoint, nil)
 	} else {
-		// Proactively fetch CSRF token for POST function calls
-		if c.csrfToken == "" {
-			if err := c.fetchCSRFToken(ctx); err != nil {
-				if c.verbose {
-					fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token: %v\n", err)
-				}
-				// Continue without token - some services might not require it
+		// Always fetch a fresh CSRF token for modifying operations (Python behavior)
+		if err := c.fetchCSRFToken(ctx); err != nil {
+			if c.verbose {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Failed to fetch CSRF token, proceeding without it: %v\n", err)
 			}
+			// Continue without token - some services might not require it
 		}
 
 		// For POST requests, send parameters in body
