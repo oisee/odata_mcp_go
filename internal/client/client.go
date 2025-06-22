@@ -488,13 +488,13 @@ func (c *ODataClient) CallFunction(ctx context.Context, functionName string, par
 	var err error
 
 	if method == constants.GET {
-		// For GET requests, add parameters to URL
+		// For GET requests, add parameters to URL with proper OData formatting
 		if len(parameters) > 0 {
-			params := url.Values{}
+			var paramStrings []string
 			for key, value := range parameters {
-				params.Add(key, fmt.Sprintf("%v", value))
+				paramStrings = append(paramStrings, c.formatFunctionParameter(key, value))
 			}
-			endpoint += "?" + params.Encode()
+			endpoint += "?" + strings.Join(paramStrings, "&")
 		}
 		req, err = c.buildRequest(ctx, constants.GET, endpoint, nil)
 	} else {
@@ -558,7 +558,9 @@ func (c *ODataClient) buildKeyPredicate(key map[string]interface{}) string {
 func (c *ODataClient) formatKeyValue(value interface{}) string {
 	switch v := value.(type) {
 	case string:
-		return fmt.Sprintf("'%s'", url.QueryEscape(v))
+		// For key predicates, don't URL encode the value inside quotes
+		// URL encoding happens at the full URL level
+		return fmt.Sprintf("'%s'", v)
 	case int, int32, int64:
 		return fmt.Sprintf("%d", v)
 	case float32, float64:
@@ -566,7 +568,26 @@ func (c *ODataClient) formatKeyValue(value interface{}) string {
 	case bool:
 		return fmt.Sprintf("%t", v)
 	default:
-		return fmt.Sprintf("'%s'", url.QueryEscape(fmt.Sprintf("%v", v)))
+		return fmt.Sprintf("'%s'", fmt.Sprintf("%v", v))
+	}
+}
+
+// formatFunctionParameter formats a function parameter for OData URL
+func (c *ODataClient) formatFunctionParameter(key string, value interface{}) string {
+	switch v := value.(type) {
+	case string:
+		// OData requires string parameters to be single-quoted
+		// URL encode the value but not the quotes
+		return fmt.Sprintf("%s='%s'", key, url.QueryEscape(v))
+	case int, int32, int64:
+		return fmt.Sprintf("%s=%d", key, v)
+	case float32, float64:
+		return fmt.Sprintf("%s=%g", key, v)
+	case bool:
+		return fmt.Sprintf("%s=%t", key, v)
+	default:
+		// Default to string representation with quotes
+		return fmt.Sprintf("%s='%s'", key, url.QueryEscape(fmt.Sprintf("%v", v)))
 	}
 }
 
