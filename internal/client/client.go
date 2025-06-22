@@ -19,13 +19,14 @@ import (
 
 // ODataClient handles HTTP communication with OData services
 type ODataClient struct {
-	baseURL    string
-	httpClient *http.Client
-	cookies    map[string]string
-	username   string
-	password   string
-	csrfToken  string
-	verbose    bool
+	baseURL       string
+	httpClient    *http.Client
+	cookies       map[string]string
+	username      string
+	password      string
+	csrfToken     string
+	verbose       bool
+	sessionCookies []*http.Cookie // Track session cookies from server
 }
 
 // NewODataClient creates a new OData client
@@ -79,6 +80,11 @@ func (c *ODataClient) buildRequest(ctx context.Context, method, endpoint string,
 			Name:  name,
 			Value: value,
 		})
+	}
+	
+	// Add session cookies received from server
+	for _, cookie := range c.sessionCookies {
+		req.AddCookie(cookie)
 	}
 
 	// Set CSRF token if available
@@ -196,13 +202,34 @@ func (c *ODataClient) fetchCSRFToken(ctx context.Context) error {
 	}
 
 	req.Header.Set(constants.CSRFTokenHeader, constants.CSRFTokenFetch)
+	
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Token fetch request: %s %s\n", req.Method, req.URL.String())
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Token fetch headers: %v\n", req.Header)
+	}
 
-	// Use doRequest to ensure proper authentication and error handling
-	resp, err := c.doRequest(req)
+	// Don't use doRequest here to avoid retry loops - fetch token requests shouldn't retry
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("CSRF token request failed: %w", err)
 	}
 	defer resp.Body.Close()
+	
+	// Store any session cookies from the response
+	if cookies := resp.Cookies(); len(cookies) > 0 {
+		c.sessionCookies = append(c.sessionCookies, cookies...)
+		if c.verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Received %d session cookies during token fetch\n", len(cookies))
+			for _, cookie := range cookies {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Cookie: %s=%s (Path=%s)\n", cookie.Name, cookie.Value[:min(len(cookie.Value), 20)]+"...", cookie.Path)
+			}
+		}
+	}
+	
+	if c.verbose {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Token fetch response status: %d\n", resp.StatusCode)
+		fmt.Fprintf(os.Stderr, "[VERBOSE] Token fetch response headers: %v\n", resp.Header)
+	}
 
 	// Check both possible header names (case variations)
 	token := resp.Header.Get(constants.CSRFTokenHeader)
