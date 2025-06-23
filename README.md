@@ -90,6 +90,23 @@ docker run --rm -it odata-mcp --help
 
 ## Usage
 
+### Claude Desktop config:
+```json
+{
+    "mcpServers": {
+        "northwind-go": {
+            "args": [
+                "--service",
+                "https://services.odata.org/V2/Northwind/Northwind.svc/",
+                "--tool-shrink"
+            ],
+            "command": "C:/bin/odata-mcp.exe"
+        }
+    }
+}
+```
+
+
 ### Basic Usage
 
 ```bash
