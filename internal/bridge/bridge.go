@@ -1169,6 +1169,10 @@ func (b *ODataMCPBridge) handleEntityCreate(ctx context.Context, entitySetName s
 		}
 	}
 	
+	// Convert numeric fields to strings for Edm.Decimal compatibility
+	// This prevents "Failed to read property 'Quantity' at offset" errors
+	entityData = utils.ConvertEntityDataForOData(entityData, nil)
+	
 	// Convert date fields to OData legacy format if needed
 	if b.config.LegacyDates {
 		entityData = utils.ConvertDatesInMap(entityData, false) // false = convert ISO to legacy
@@ -1228,6 +1232,10 @@ func (b *ODataMCPBridge) handleEntityUpdate(ctx context.Context, entitySetName s
 			return nil, fmt.Errorf("missing required key property: %s", keyProp)
 		}
 	}
+	
+	// Convert numeric fields to strings for Edm.Decimal compatibility
+	// This prevents "Failed to read property 'Quantity' at offset" errors
+	updateData = utils.ConvertEntityDataForOData(updateData, nil)
 	
 	// Convert date fields to OData legacy format if needed
 	if b.config.LegacyDates {
