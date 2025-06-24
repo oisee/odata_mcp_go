@@ -33,6 +33,7 @@ type Config struct {
 	// Response enhancement options
 	PaginationHints  bool `mapstructure:"pagination_hints"`   // Add pagination support with hints
 	LegacyDates      bool `mapstructure:"legacy_dates"`       // Support epoch timestamp format
+	NoLegacyDates    bool `mapstructure:"no_legacy_dates"`    // Disable legacy date format
 	VerboseErrors    bool `mapstructure:"verbose_errors"`     // Detailed error context
 	ResponseMetadata bool `mapstructure:"response_metadata"`  // Include __metadata in responses
 	

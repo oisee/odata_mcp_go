@@ -71,7 +71,8 @@ func init() {
 	
 	// Response enhancement options
 	rootCmd.Flags().BoolVar(&cfg.PaginationHints, "pagination-hints", false, "Add pagination support with suggested_next_call and has_more indicators")
-	rootCmd.Flags().BoolVar(&cfg.LegacyDates, "legacy-dates", false, "Support epoch timestamp format (/Date(1234567890000)/)")
+	rootCmd.Flags().BoolVar(&cfg.LegacyDates, "legacy-dates", true, "Support epoch timestamp format (/Date(1234567890000)/) - enabled by default for SAP")
+	rootCmd.Flags().BoolVar(&cfg.NoLegacyDates, "no-legacy-dates", false, "Disable legacy date format conversion")
 	rootCmd.Flags().BoolVar(&cfg.VerboseErrors, "verbose-errors", false, "Provide detailed error context and debugging information")
 	rootCmd.Flags().BoolVar(&cfg.ResponseMetadata, "response-metadata", false, "Include detailed __metadata blocks in entity responses")
 	
@@ -95,6 +96,20 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	// Handle --debug as alias for --verbose
 	if cfg.Debug {
 		cfg.Verbose = true
+	}
+	
+	// Handle legacy dates flags
+	if cfg.NoLegacyDates {
+		cfg.LegacyDates = false
+		if cfg.Verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Legacy date format conversion disabled.\n")
+		}
+	} else if !cmd.Flags().Changed("legacy-dates") {
+		// Default to legacy dates for SAP compatibility
+		cfg.LegacyDates = true
+		if cfg.Verbose {
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Legacy date format enabled by default for SAP compatibility. Use --no-legacy-dates to disable.\n")
+		}
 	}
 
 	// Determine service URL with priority: --service flag > positional arg > env vars

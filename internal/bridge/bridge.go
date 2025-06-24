@@ -13,6 +13,7 @@ import (
 	"github.com/odata-mcp/go/internal/constants"
 	"github.com/odata-mcp/go/internal/mcp"
 	"github.com/odata-mcp/go/internal/models"
+	"github.com/odata-mcp/go/internal/utils"
 )
 
 // ODataMCPBridge connects OData services to MCP
@@ -1026,10 +1027,12 @@ func (b *ODataMCPBridge) applySizeLimits(response *models.ODataResponse) *models
 
 // convertLegacyDates converts date fields to epoch timestamp format (/Date(1234567890000)/)
 func (b *ODataMCPBridge) convertLegacyDates(data interface{}) interface{} {
-	// This is a placeholder for legacy date conversion
-	// In a full implementation, this would recursively traverse the data structure
-	// and convert ISO date strings to /Date(epoch)/ format
-	return data
+	if !b.config.LegacyDates {
+		return data
+	}
+	
+	// Convert from OData legacy format to ISO for display
+	return utils.ConvertDatesInResponse(data, true)
 }
 
 // stripMetadata removes __metadata blocks from entities unless specifically requested
@@ -1166,11 +1169,19 @@ func (b *ODataMCPBridge) handleEntityCreate(ctx context.Context, entitySetName s
 		}
 	}
 	
+	// Convert date fields to OData legacy format if needed
+	if b.config.LegacyDates {
+		entityData = utils.ConvertDatesInMap(entityData, false) // false = convert ISO to legacy
+	}
+	
 	// Call OData client to create entity
 	response, err := b.client.CreateEntity(ctx, entitySetName, entityData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create entity: %w", err)
 	}
+	
+	// Enhance response (includes date conversion if enabled)
+	response = b.enhanceResponse(response, make(map[string]string))
 	
 	// Format response as JSON string
 	result, err := json.Marshal(response)
@@ -1218,11 +1229,19 @@ func (b *ODataMCPBridge) handleEntityUpdate(ctx context.Context, entitySetName s
 		}
 	}
 	
+	// Convert date fields to OData legacy format if needed
+	if b.config.LegacyDates {
+		updateData = utils.ConvertDatesInMap(updateData, false) // false = convert ISO to legacy
+	}
+	
 	// Call OData client to update entity
 	response, err := b.client.UpdateEntity(ctx, entitySetName, key, updateData, method)
 	if err != nil {
 		return nil, fmt.Errorf("failed to update entity: %w", err)
 	}
+	
+	// Enhance response (includes date conversion if enabled)
+	response = b.enhanceResponse(response, make(map[string]string))
 	
 	// Format response as JSON string
 	result, err := json.Marshal(response)
