@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -71,6 +72,9 @@ type Server struct {
 
 // NewServer creates a new MCP server
 func NewServer(name, version string) *Server {
+	// Disable logging to avoid contaminating stdio communication
+	log.SetOutput(ioutil.Discard)
+	
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		name:     name,
@@ -139,6 +143,10 @@ func (s *Server) SetIO(input io.Reader, output io.Writer) {
 // Run starts the MCP server
 func (s *Server) Run() error {
 	scanner := bufio.NewScanner(s.input)
+	// Increase buffer size to handle large messages (10MB)
+	const maxScanTokenSize = 10 * 1024 * 1024
+	buf := make([]byte, maxScanTokenSize)
+	scanner.Buffer(buf, maxScanTokenSize)
 	
 	for scanner.Scan() {
 		select {
@@ -153,7 +161,7 @@ func (s *Server) Run() error {
 		}
 		
 		if err := s.handleMessage(line); err != nil {
-			log.Printf("Error handling message: %v", err)
+			// Error already sent as JSON-RPC response, don't log to stdout/stderr
 		}
 	}
 	
@@ -171,7 +179,6 @@ func (s *Server) handleMessage(line string) error {
 	var rawMsg map[string]interface{}
 	if err := json.Unmarshal([]byte(line), &rawMsg); err != nil {
 		// Can't send error response if we can't parse JSON
-		log.Printf("Parse error: %v", err)
 		return err
 	}
 	
