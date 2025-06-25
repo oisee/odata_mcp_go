@@ -5,202 +5,175 @@ import (
 	"testing"
 
 	"github.com/odata-mcp/go/internal/utils"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
-
-func TestConvertNumericFieldsToStrings(t *testing.T) {
-	tests := []struct {
-		name          string
-		input         map[string]interface{}
-		decimalFields []string
-		expected      map[string]interface{}
-	}{
-		{
-			name: "Convert specified decimal fields",
-			input: map[string]interface{}{
-				"OrderID":   "001",
-				"Quantity":  10,
-				"UnitPrice": 25.50,
-				"Status":    "Active",
-			},
-			decimalFields: []string{"Quantity", "UnitPrice"},
-			expected: map[string]interface{}{
-				"OrderID":   "001",
-				"Quantity":  "10",
-				"UnitPrice": "25.5",
-				"Status":    "Active",
-			},
-		},
-		{
-			name: "Handle various numeric types",
-			input: map[string]interface{}{
-				"IntValue":    int32(42),
-				"FloatValue":  float32(3.14),
-				"DoubleValue": 2.71828,
-				"LargeInt":    int64(1000000),
-			},
-			decimalFields: []string{"IntValue", "FloatValue", "DoubleValue", "LargeInt"},
-			expected: map[string]interface{}{
-				"IntValue":    "42",
-				"FloatValue":  "3.14",  // float32 may have precision issues
-				"DoubleValue": "2.71828",
-				"LargeInt":    "1000000",
-			},
-		},
-		{
-			name: "Preserve non-numeric values",
-			input: map[string]interface{}{
-				"Name":     "Product A",
-				"Quantity": "already a string",
-				"IsActive": true,
-				"Data":     nil,
-			},
-			decimalFields: []string{"Quantity"},
-			expected: map[string]interface{}{
-				"Name":     "Product A",
-				"Quantity": "already a string",
-				"IsActive": true,
-				"Data":     nil,
-			},
-		},
-		{
-			name: "Handle nested structures",
-			input: map[string]interface{}{
-				"OrderID": "001",
-				"Items": []interface{}{
-					map[string]interface{}{
-						"ItemID":   "I001",
-						"Quantity": 5,
-						"Price":    19.99,
-					},
-				},
-			},
-			decimalFields: []string{"Quantity", "Price"},
-			expected: map[string]interface{}{
-				"OrderID": "001",
-				"Items": []interface{}{
-					map[string]interface{}{
-						"ItemID":   "I001",
-						"Quantity": "5",
-						"Price":    "19.99",
-					},
-				},
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := utils.ConvertNumericFieldsToStrings(tt.input, tt.decimalFields)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
-
-func TestConvertToString(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    interface{}
-		expected string
-	}{
-		{"nil value", nil, ""},
-		{"string value", "test", "test"},
-		{"int value", 42, "42"},
-		{"int64 value", int64(1234567890), "1234567890"},
-		{"float32 value", float32(3.14), "3.14"},  // Note: float32 may show more precision
-		{"float64 whole number", 100.0, "100"},
-		{"float64 decimal", 25.75, "25.75"},
-		{"bool true", true, "true"},
-		{"bool false", false, "false"},
-		{"large number avoiding scientific notation", 1000000.0, "1000000"},
-		{"small decimal", 0.00001, "1e-05"}, // Go's %g format may use scientific notation for very small numbers
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := utils.ConvertToString(tt.input)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
-}
 
 func TestIsLikelyDecimalField(t *testing.T) {
 	tests := []struct {
-		name     string
 		field    string
 		expected bool
 	}{
-		{"Quantity field", "Quantity", true},
-		{"quantity lowercase", "quantity", true},
-		{"OrderQuantity", "OrderQuantity", true},
-		{"NetAmount", "NetAmount", true},
-		{"UnitPrice", "UnitPrice", true},
-		{"TaxAmount", "TaxAmount", true},
-		{"discount_amt", "discount_amt", true},
-		{"total_cost", "total_cost", true},
-		{"Regular field", "Name", false},
-		{"Description", "Description", false},
-		{"Status", "Status", false},
+		// Should be detected as decimal
+		{"Quantity", true},
+		{"quantity", true},
+		{"TotalAmount", true},
+		{"NetPrice", true},
+		{"UnitCost", true},
+		{"DiscountRate", true},
+		{"TaxPercentage", true},
+		{"item_qty", true},
+		{"price_amt", true},
+		{"Weight", true},
+		{"Volume", true},
+		
+		// Should NOT be detected as decimal
+		{"ProductID", false},
+		{"CustomerName", false},
+		{"Description", false},
+		{"Status", false},
+		{"Category", false},
+		{"Email", false},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := utils.IsLikelyDecimalField(tt.field)
-			assert.Equal(t, tt.expected, result)
-		})
+	for _, test := range tests {
+		result := utils.IsLikelyDecimalField(test.field)
+		if result != test.expected {
+			t.Errorf("IsLikelyDecimalField(%s) = %v, expected %v", test.field, result, test.expected)
+		}
 	}
 }
 
-func TestConvertEntityDataForOData(t *testing.T) {
-	input := map[string]interface{}{
-		"OrderID":      "001",
-		"CustomerName": "John Doe",
-		"Quantity":     10,
-		"UnitPrice":    25.50,
-		"TaxAmount":    2.55,
-		"Status":       "Active",
-		"IsUrgent":     true,
+func TestConvertNumericToString(t *testing.T) {
+	tests := []struct {
+		input    interface{}
+		expected string
+		isString bool
+	}{
+		{int(42), "42", true},
+		{int64(999999), "999999", true},
+		{float32(123.45), "123.45", true},
+		{float64(999.99), "999.99", true},
+		{uint(100), "100", true},
+		{"already string", "already string", true},
+		{true, "", false}, // bool should not convert
+		{nil, "", false},  // nil should not convert
 	}
 
-	result := utils.ConvertEntityDataForOData(input, nil)
-
-	// Numeric fields that look like decimals should be converted to strings
-	assert.Equal(t, "10", result["Quantity"])
-	assert.Equal(t, "25.5", result["UnitPrice"])
-	assert.Equal(t, "2.55", result["TaxAmount"])
-
-	// Non-decimal fields should remain unchanged
-	assert.Equal(t, "001", result["OrderID"])
-	assert.Equal(t, "John Doe", result["CustomerName"])
-	assert.Equal(t, "Active", result["Status"])
-	assert.Equal(t, true, result["IsUrgent"])
+	for _, test := range tests {
+		result := utils.ConvertNumericToString(test.input)
+		
+		if test.isString {
+			str, ok := result.(string)
+			if !ok {
+				t.Errorf("ConvertNumericToString(%v) did not return string", test.input)
+				continue
+			}
+			if str != test.expected {
+				t.Errorf("ConvertNumericToString(%v) = %s, expected %s", test.input, str, test.expected)
+			}
+		} else {
+			if result != test.input {
+				t.Errorf("ConvertNumericToString(%v) should not have converted", test.input)
+			}
+		}
+	}
 }
 
-func TestJSONMarshalingAfterConversion(t *testing.T) {
-	// This test verifies that after conversion, JSON marshaling produces strings for numeric fields
+func TestConvertNumericsInMap(t *testing.T) {
 	input := map[string]interface{}{
-		"ProductID": "P001",
-		"Quantity":  5,
-		"Price":     19.99,
+		"SalesOrderID": "12345",
+		"Quantity":     1,
+		"Price":        99.99,
+		"Description":  "Test Product",
+		"IsActive":     true,
+		"ItemCount":    5,
 	}
 
-	// Convert numeric fields
-	converted := utils.ConvertEntityDataForOData(input, nil)
+	result := utils.ConvertNumericsInMap(input)
 
-	// Marshal to JSON
+	// Check conversions
+	if qty, ok := result["Quantity"].(string); !ok || qty != "1" {
+		t.Errorf("Quantity was not converted correctly: %v", result["Quantity"])
+	}
+
+	if price, ok := result["Price"].(string); !ok || price != "99.99" {
+		t.Errorf("Price was not converted correctly: %v", result["Price"])
+	}
+
+	if count, ok := result["ItemCount"].(string); !ok || count != "5" {
+		t.Errorf("ItemCount was not converted correctly: %v", result["ItemCount"])
+	}
+
+	// Check non-conversions
+	if desc, ok := result["Description"].(string); !ok || desc != "Test Product" {
+		t.Errorf("Description should remain unchanged: %v", result["Description"])
+	}
+
+	if active, ok := result["IsActive"].(bool); !ok || !active {
+		t.Errorf("IsActive should remain bool: %v", result["IsActive"])
+	}
+}
+
+func TestConvertNumericsInNestedStructure(t *testing.T) {
+	input := map[string]interface{}{
+		"OrderID": "12345",
+		"Total":   500.50,
+		"Items": []interface{}{
+			map[string]interface{}{
+				"ItemID":   1,
+				"Quantity": 5,
+				"Price":    100.10,
+			},
+		},
+		"Customer": map[string]interface{}{
+			"ID":      "C001",
+			"Balance": 1000.00,
+		},
+	}
+
+	result := utils.ConvertNumericsInMap(input)
+
+	// Check nested conversions
+	items, ok := result["Items"].([]interface{})
+	if !ok || len(items) != 1 {
+		t.Fatalf("Items not converted correctly")
+	}
+
+	item := items[0].(map[string]interface{})
+	if qty, ok := item["Quantity"].(string); !ok || qty != "5" {
+		t.Errorf("Nested Quantity not converted: %v", item["Quantity"])
+	}
+
+	customer := result["Customer"].(map[string]interface{})
+	if balance, ok := customer["Balance"].(string); !ok || balance != "1000" {
+		t.Errorf("Nested Balance not converted: %v", customer["Balance"])
+	}
+}
+
+func TestJSONMarshalAfterConversion(t *testing.T) {
+	input := map[string]interface{}{
+		"Quantity": 10,
+		"Price":    99.99,
+	}
+
+	converted := utils.ConvertNumericsInMap(input)
 	jsonData, err := json.Marshal(converted)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("JSON marshal failed: %v", err)
+	}
 
-	// The JSON should have numeric values as strings
-	expected := `{"Price":"19.99","ProductID":"P001","Quantity":"5"}`
+	expected := `{"Price":"99.99","Quantity":"10"}`
+	if string(jsonData) != expected {
+		t.Errorf("JSON output incorrect.\nGot:      %s\nExpected: %s", jsonData, expected)
+	}
+
+	// Verify the JSON contains strings, not numbers
+	var parsed map[string]interface{}
+	json.Unmarshal(jsonData, &parsed)
 	
-	// Parse both to compare (to handle key ordering)
-	var expectedMap, actualMap map[string]interface{}
-	err = json.Unmarshal([]byte(expected), &expectedMap)
-	require.NoError(t, err)
-	err = json.Unmarshal(jsonData, &actualMap)
-	require.NoError(t, err)
-
-	assert.Equal(t, expectedMap, actualMap)
+	if _, ok := parsed["Quantity"].(string); !ok {
+		t.Errorf("Quantity is not a string in JSON output")
+	}
+	if _, ok := parsed["Price"].(string); !ok {
+		t.Errorf("Price is not a string in JSON output")
+	}
 }

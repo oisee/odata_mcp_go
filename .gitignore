@@ -21,3 +21,7 @@ coverage/*
 .claude/
 claude.*
 .*
+# Environment files with credentials
+.env.test
+.env.local
+.env.*.local

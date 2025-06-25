@@ -1169,9 +1169,9 @@ func (b *ODataMCPBridge) handleEntityCreate(ctx context.Context, entitySetName s
 		}
 	}
 	
-	// Convert numeric fields to strings for Edm.Decimal compatibility
+	// Convert numeric fields to strings for SAP OData v2 compatibility
 	// This prevents "Failed to read property 'Quantity' at offset" errors
-	entityData = utils.ConvertEntityDataForOData(entityData, nil)
+	entityData = utils.ConvertNumericsInMap(entityData)
 	
 	// Convert date fields to OData legacy format if needed
 	if b.config.LegacyDates {
@@ -1233,9 +1233,9 @@ func (b *ODataMCPBridge) handleEntityUpdate(ctx context.Context, entitySetName s
 		}
 	}
 	
-	// Convert numeric fields to strings for Edm.Decimal compatibility
+	// Convert numeric fields to strings for SAP OData v2 compatibility
 	// This prevents "Failed to read property 'Quantity' at offset" errors
-	updateData = utils.ConvertEntityDataForOData(updateData, nil)
+	updateData = utils.ConvertNumericsInMap(updateData)
 	
 	// Convert date fields to OData legacy format if needed
 	if b.config.LegacyDates {
