@@ -6,7 +6,7 @@ BINARY_NAME=odata-mcp
 MAIN_PATH=cmd/odata-mcp/main.go
 BUILD_DIR=build
 DIST_DIR=dist
-VERSION?=1.0.0
+VERSION?=1.0.1
 COMMIT?=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 BUILD_TIME?=$(shell date -u +"%Y-%m-%dT%H:%M:%SZ")
 
