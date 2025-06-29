@@ -23,9 +23,12 @@ type EntityType struct {
 // NavigationProperty represents a navigation property in an entity type
 type NavigationProperty struct {
 	Name         string `json:"name"`
-	Relationship string `json:"relationship"`
-	ToRole       string `json:"to_role"`
-	FromRole     string `json:"from_role"`
+	Relationship string `json:"relationship,omitempty"` // v2 only
+	ToRole       string `json:"to_role,omitempty"`      // v2 only
+	FromRole     string `json:"from_role,omitempty"`    // v2 only
+	Type         string `json:"type,omitempty"`         // v4 only
+	Partner      string `json:"partner,omitempty"`      // v4 only
+	Nullable     bool   `json:"nullable"`               // v4 only
 }
 
 // EntitySet represents an OData entity set
@@ -52,9 +55,19 @@ type FunctionImportParameter struct {
 type FunctionImport struct {
 	Name        string                     `json:"name"`
 	HTTPMethod  string                     `json:"http_method"`
-	ReturnType  *string                    `json:"return_type,omitempty"`
-	Parameters  []*FunctionImportParameter `json:"parameters"`
+	ReturnType  string                     `json:"return_type,omitempty"`
+	Parameters  []*FunctionParameter       `json:"parameters"`
 	Description *string                    `json:"description,omitempty"`
+	IsBound     bool                       `json:"is_bound,omitempty"`     // v4 only
+	IsAction    bool                       `json:"is_action,omitempty"`    // v4 only (true for actions, false for functions)
+}
+
+// FunctionParameter represents a parameter for a function/action
+type FunctionParameter struct {
+	Name     string `json:"name"`
+	Type     string `json:"type"`
+	Mode     string `json:"mode,omitempty"` // v2 only: In, Out, InOut
+	Nullable bool   `json:"nullable"`
 }
 
 // ODataMetadata represents the complete OData service metadata

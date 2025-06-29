@@ -19,14 +19,15 @@ import (
 
 // ODataClient handles HTTP communication with OData services
 type ODataClient struct {
-	baseURL       string
-	httpClient    *http.Client
-	cookies       map[string]string
-	username      string
-	password      string
-	csrfToken     string
-	verbose       bool
+	baseURL        string
+	httpClient     *http.Client
+	cookies        map[string]string
+	username       string
+	password       string
+	csrfToken      string
+	verbose        bool
 	sessionCookies []*http.Cookie // Track session cookies from server
+	isV4           bool           // Whether the service is OData v4
 }
 
 // NewODataClient creates a new OData client
@@ -42,6 +43,7 @@ func NewODataClient(baseURL string, verbose bool) *ODataClient {
 			Timeout: time.Duration(constants.DefaultTimeout) * time.Second,
 		},
 		verbose: verbose,
+		isV4:    false, // Will be determined when fetching metadata
 	}
 }
 
@@ -67,7 +69,11 @@ func (c *ODataClient) buildRequest(ctx context.Context, method, endpoint string,
 
 	// Set standard headers
 	req.Header.Set(constants.UserAgent, constants.DefaultUserAgent)
-	req.Header.Set(constants.Accept, constants.ContentTypeJSON)
+	if c.isV4 {
+		req.Header.Set(constants.Accept, constants.ContentTypeODataJSONV4)
+	} else {
+		req.Header.Set(constants.Accept, constants.ContentTypeJSON)
+	}
 
 	// Set authentication
 	if c.username != "" && c.password != "" {
@@ -306,12 +312,17 @@ func (c *ODataClient) GetEntitySet(ctx context.Context, entitySet string, option
 	// Build query parameters with standard OData v2 parameters
 	params := url.Values{}
 	
-	// Always add JSON format for consistent responses
-	params.Add(constants.QueryFormat, "json")
+	// Always add JSON format for consistent responses (v2 only)
+	if !c.isV4 {
+		params.Add(constants.QueryFormat, "json")
+	}
 	
 	// Add inline count for pagination support unless explicitly requesting count only
-	if _, hasInlineCount := options[constants.QueryInlineCount]; !hasInlineCount {
-		params.Add(constants.QueryInlineCount, "allpages")
+	// OData v4 uses $count=true instead of $inlinecount
+	if !c.isV4 {
+		if _, hasInlineCount := options[constants.QueryInlineCount]; !hasInlineCount {
+			params.Add(constants.QueryInlineCount, "allpages")
+		}
 	}
 	
 	// Add user-provided parameters
@@ -612,71 +623,59 @@ func (c *ODataClient) parseODataResponse(resp *http.Response) (*models.ODataResp
 		fmt.Fprintf(os.Stderr, "[VERBOSE] Raw response: %s\n", string(body))
 	}
 
-	// OData v2 typically wraps results in a "d" property
-	var wrapper struct {
-		D json.RawMessage `json:"d"`
-	}
-	
-	if err := json.Unmarshal(body, &wrapper); err != nil {
-		// Try direct parsing if no wrapper
-		var odataResp models.ODataResponse
-		if err := json.Unmarshal(body, &odataResp); err != nil {
-			return nil, fmt.Errorf("failed to parse OData response: %w", err)
-		}
-		c.optimizeResponse(&odataResp)
-		return &odataResp, nil
+	// Parse using the appropriate parser
+	parsedResponse, err := parseODataResponse(body, c.isV4)
+	if err != nil {
+		return nil, err
 	}
 
-	// Parse the wrapped response
+	// Convert to ODataResponse model
 	var odataResp models.ODataResponse
-	if len(wrapper.D) > 0 {
-		if c.verbose {
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Wrapped content: %s\n", string(wrapper.D))
-		}
-		
-		// OData v2 responses typically have a structure like:
-		// { "d": { "results": [...], "__count": "N" } } for collections
-		// { "d": { ...entity properties... } } for single entities
-		
-		// First check if it's a collection response
-		var collectionCheck struct {
-			Results json.RawMessage `json:"results"`
-		}
-		if err := json.Unmarshal(wrapper.D, &collectionCheck); err == nil && len(collectionCheck.Results) > 0 {
-			// It's a collection - parse as such
-			var collection struct {
-				Results []json.RawMessage `json:"results"`
-				Count   string           `json:"__count,omitempty"`
+	
+	switch v := parsedResponse.(type) {
+	case map[string]interface{}:
+		// Check for v4 format
+		if c.isV4 {
+			// OData v4 format
+			if value, ok := v["value"]; ok {
+				odataResp.Value = value
+			} else {
+				// Single entity
+				odataResp.Value = v
 			}
-			if err := json.Unmarshal(wrapper.D, &collection); err != nil {
-				return nil, fmt.Errorf("failed to parse collection response: %w", err)
-			}
-			
-			// Convert raw messages to interface{}
-			entities := make([]interface{}, len(collection.Results))
-			for i, raw := range collection.Results {
-				var entity interface{}
-				if err := json.Unmarshal(raw, &entity); err != nil {
-					return nil, fmt.Errorf("failed to parse entity %d: %w", i, err)
+			if count, ok := v["@odata.count"]; ok {
+				if countFloat, ok := count.(float64); ok {
+					countInt := int64(countFloat)
+					odataResp.Count = &countInt
 				}
-				entities[i] = entity
 			}
-			odataResp.Value = entities
-			
-			if collection.Count != "" {
-				var count int64
-				fmt.Sscanf(collection.Count, "%d", &count)
-				odataResp.Count = &count
+			if nextLink, ok := v["@odata.nextLink"]; ok {
+				odataResp.NextLink = nextLink.(string)
+			}
+			if context, ok := v["@odata.context"]; ok {
+				odataResp.Context = context.(string)
 			}
 		} else {
-			// It's a single entity - parse the entity directly
-			var entity interface{}
-			if err := json.Unmarshal(wrapper.D, &entity); err != nil {
-				return nil, fmt.Errorf("failed to parse single entity response: %w", err)
+			// OData v2 format (already normalized by parseODataResponse)
+			if value, ok := v["value"]; ok {
+				odataResp.Value = value
+			} else {
+				// Single entity
+				odataResp.Value = v
 			}
-			// For single entities, put the entity directly in Value (not wrapped in array)
-			odataResp.Value = entity
+			if count, ok := v["@odata.count"]; ok {
+				if countFloat, ok := count.(float64); ok {
+					countInt := int64(countFloat)
+					odataResp.Count = &countInt
+				}
+			}
+			if nextLink, ok := v["@odata.nextLink"]; ok {
+				odataResp.NextLink = nextLink.(string)
+			}
 		}
+	default:
+		// Direct value
+		odataResp.Value = parsedResponse
 	}
 
 	// Process GUIDs if needed (to be implemented)
@@ -769,7 +768,15 @@ func (c *ODataClient) optimizeResponse(resp *models.ODataResponse) {
 
 // parseMetadataXML parses OData metadata XML
 func (c *ODataClient) parseMetadataXML(data []byte) (*models.ODataMetadata, error) {
-	return metadata.ParseMetadata(data, c.baseURL)
+	meta, err := metadata.ParseMetadata(data, c.baseURL)
+	if err != nil {
+		return nil, err
+	}
+	
+	// Set the client's v4 flag based on metadata version
+	c.isV4 = meta.Version == "4.0" || meta.Version == "4.01"
+	
+	return meta, nil
 }
 
 // getServiceDocument gets the service document as fallback

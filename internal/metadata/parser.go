@@ -113,7 +113,14 @@ type Parameter struct {
 }
 
 // ParseMetadata parses OData metadata XML and returns structured metadata
+// It automatically detects whether the metadata is v2 or v4 and uses the appropriate parser
 func ParseMetadata(data []byte, serviceRoot string) (*models.ODataMetadata, error) {
+	// Check if it's OData v4
+	if IsODataV4(data) {
+		return ParseMetadataV4(data, serviceRoot)
+	}
+	
+	// Parse as OData v2
 	var edmx EDMX
 	if err := xml.Unmarshal(data, &edmx); err != nil {
 		return nil, fmt.Errorf("failed to parse metadata XML: %w", err)
@@ -219,11 +226,11 @@ func parseFunctionImport(fi FunctionImport) *models.FunctionImport {
 	functionImport := &models.FunctionImport{
 		Name:       fi.Name,
 		HTTPMethod: fi.HTTPMethod,
-		Parameters: make([]*models.FunctionImportParameter, 0),
+		Parameters: make([]*models.FunctionParameter, 0),
 	}
 
 	if fi.ReturnType != "" {
-		functionImport.ReturnType = &fi.ReturnType
+		functionImport.ReturnType = fi.ReturnType
 	}
 
 	// Default HTTP method to GET if not specified
@@ -233,7 +240,7 @@ func parseFunctionImport(fi FunctionImport) *models.FunctionImport {
 
 	// Parse parameters
 	for _, param := range fi.Parameters {
-		parameter := &models.FunctionImportParameter{
+		parameter := &models.FunctionParameter{
 			Name:     param.Name,
 			Type:     param.Type,
 			Mode:     param.Mode,

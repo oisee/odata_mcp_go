@@ -1,12 +1,12 @@
 # OData MCP Bridge (Go)
 
-A Go implementation of the OData v2 to Model Context Protocol (MCP) bridge, providing universal access to OData services through MCP tools.
+A Go implementation of the OData to Model Context Protocol (MCP) bridge, providing universal access to OData services through MCP tools.
 
-This is a Go port of the Python OData-MCP bridge implementation, designed to be easier to run on different operating systems with better performance and simpler deployment.
+This is a Go port of the Python OData-MCP bridge implementation, designed to be easier to run on different operating systems with better performance and simpler deployment. It supports both OData v2 and v4 services.
 
 ## Features
 
-- **Universal OData v2 Support**: Works with any OData v2 service
+- **Universal OData Support**: Works with both OData v2 and v4 services
 - **Dynamic Tool Generation**: Automatically creates MCP tools based on OData metadata
 - **Multiple Authentication Methods**: Basic auth, cookie auth, and anonymous access
 - **SAP OData Extensions**: Full support for SAP-specific OData features including CSRF tokens
@@ -94,10 +94,18 @@ docker run --rm -it odata-mcp --help
 ```json
 {
     "mcpServers": {
-        "northwind-go": {
+        "northwind-v2": {
             "args": [
                 "--service",
                 "https://services.odata.org/V2/Northwind/Northwind.svc/",
+                "--tool-shrink"
+            ],
+            "command": "C:/bin/odata-mcp.exe"
+        },
+        "northwind-v4": {
+            "args": [
+                "--service",
+                "https://services.odata.org/V4/Northwind/Northwind.svc/",
                 "--tool-shrink"
             ],
             "command": "C:/bin/odata-mcp.exe"
@@ -240,10 +248,10 @@ Each function import is mapped to an individual tool with the function name.
 
 ## Examples
 
-### Northwind Service
+### Northwind Service (v2)
 
 ```bash
-# Connect to the public Northwind OData service
+# Connect to the public Northwind OData v2 service
 ./odata-mcp --trace https://services.odata.org/V2/Northwind/Northwind.svc/
 
 # This will show generated tools like:
@@ -252,6 +260,19 @@ Each function import is mapped to an individual tool with the function name.
 # - filter_Categories_for_northwind
 # - get_Orders_for_northwind
 # - etc.
+```
+
+### Northwind Service (v4)
+
+```bash
+# Connect to the public Northwind OData v4 service
+./odata-mcp --trace https://services.odata.org/V4/Northwind/Northwind.svc/
+
+# OData v4 is automatically detected and handled appropriately
+# Supports v4 specific features like:
+# - $count parameter instead of $inlinecount
+# - contains() filter function
+# - New data types (Edm.Date, Edm.TimeOfDay, etc.)
 ```
 
 ### SAP OData Service
