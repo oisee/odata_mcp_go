@@ -189,12 +189,12 @@ func TestEntityFilter(t *testing.T) {
 			{
 				name:           "Simple string filter",
 				filter:         "Program eq 'ZHELLO_GO_TEST'",
-				expectedFilter: "Program+eq+%27ZHELLO_GO_TEST%27",
+				expectedFilter: "Program%20eq%20%27ZHELLO_GO_TEST%27",
 			},
 			{
 				name:           "Filter with package",
 				filter:         "Package eq '$VIBE_TEST'",
-				expectedFilter: "Package+eq+%27%24VIBE_TEST%27",
+				expectedFilter: "Package%20eq%20%27%24VIBE_TEST%27",
 			},
 		}
 		

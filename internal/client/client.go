@@ -344,7 +344,9 @@ func (c *ODataClient) GetEntitySet(ctx context.Context, entitySet string, option
 	}
 	
 	if len(params) > 0 {
-		endpoint += "?" + params.Encode()
+		encodedQuery := params.Encode()
+		// Replace '+' with '%20' for compatibility with servers that don't accept '+' for spaces.
+		endpoint += "?" + strings.ReplaceAll(encodedQuery, "+", "%20")
 	}
 
 	req, err := c.buildRequest(ctx, constants.GET, endpoint, nil)
@@ -376,7 +378,9 @@ func (c *ODataClient) GetEntity(ctx context.Context, entitySet string, key map[s
 			}
 		}
 		if len(params) > 0 {
-			endpoint += "?" + params.Encode()
+			encodedQuery := params.Encode()
+		// Replace '+' with '%20' for compatibility with servers that don't accept '+' for spaces.
+		endpoint += "?" + strings.ReplaceAll(encodedQuery, "+", "%20")
 		}
 	}
 
