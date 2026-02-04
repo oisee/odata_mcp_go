@@ -62,6 +62,7 @@ type Property struct {
 	MaxLength string   `xml:"MaxLength,attr"`
 	Precision string   `xml:"Precision,attr"`
 	Scale     string   `xml:"Scale,attr"`
+	SAPLabel  string   `xml:"sap:label,attr"`
 }
 
 // NavigationProperty represents a navigation property
@@ -181,6 +182,10 @@ func parseEntityType(et EntityType) *models.EntityType {
 			Type:     prop.Type,
 			Nullable: prop.Nullable != "false", // Default to true if not specified
 			IsKey:    contains(entityType.KeyProperties, prop.Name),
+		}
+		if prop.SAPLabel != "" {
+			label := prop.SAPLabel
+			property.SAPLabel = &label
 		}
 		entityType.Properties = append(entityType.Properties, property)
 	}

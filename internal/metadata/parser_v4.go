@@ -96,6 +96,7 @@ type PropertyV4 struct {
 	Scale        string   `xml:"Scale,attr"`
 	Unicode      string   `xml:"Unicode,attr"`
 	DefaultValue string   `xml:"DefaultValue,attr"`
+	SAPLabel     string   `xml:"sap:label,attr"`
 }
 
 // NavigationPropertyV4 represents a navigation property in OData v4
@@ -286,6 +287,10 @@ func parseEntityTypeV4(et EntityTypeV4) *models.EntityType {
 			Type:     normalizeTypeV4(prop.Type),
 			Nullable: prop.Nullable != "false",
 			IsKey:    contains(entityType.KeyProperties, prop.Name),
+		}
+		if prop.SAPLabel != "" {
+			label := prop.SAPLabel
+			property.SAPLabel = &label
 		}
 		entityType.Properties = append(entityType.Properties, property)
 	}
