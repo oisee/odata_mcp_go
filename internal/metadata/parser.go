@@ -62,7 +62,8 @@ type Property struct {
 	MaxLength string   `xml:"MaxLength,attr"`
 	Precision string   `xml:"Precision,attr"`
 	Scale     string   `xml:"Scale,attr"`
-	SAPLabel  string   `xml:"sap:label,attr"`
+	SAPLabel  string     `xml:"{http://www.sap.com/Protocols/SAPData}label,attr"`
+	Attrs     []xml.Attr `xml:",any,attr"`
 }
 
 // NavigationProperty represents a navigation property
@@ -183,8 +184,11 @@ func parseEntityType(et EntityType) *models.EntityType {
 			Nullable: prop.Nullable != "false", // Default to true if not specified
 			IsKey:    contains(entityType.KeyProperties, prop.Name),
 		}
-		if prop.SAPLabel != "" {
-			label := prop.SAPLabel
+		label := prop.SAPLabel
+		if label == "" {
+			label = sapLabelFromAttrs(prop.Attrs)
+		}
+		if label != "" {
 			property.SAPLabel = &label
 		}
 		entityType.Properties = append(entityType.Properties, property)
@@ -277,4 +281,18 @@ func contains(slice []string, item string) bool {
 		}
 	}
 	return false
+}
+
+func sapLabelFromAttrs(attrs []xml.Attr) string {
+	for _, attr := range attrs {
+		if attr.Name.Local != "label" {
+			continue
+		}
+		if attr.Name.Space == "http://www.sap.com/Protocols/SAPData" ||
+			strings.Contains(attr.Name.Space, "sap") ||
+			attr.Name.Space == "" {
+			return attr.Value
+		}
+	}
+	return ""
 }
