@@ -284,6 +284,19 @@ func (b *ODataMCPBridge) mapParameterToOData(param string) string {
 	return param
 }
 
+// describeProperty builds a human-friendly description for a property,
+// including the SAP label when available.
+func (b *ODataMCPBridge) describeProperty(prefix string, prop *models.EntityProperty) string {
+	if prop == nil {
+		return prefix
+	}
+	desc := fmt.Sprintf("%s: %s", prefix, prop.Name)
+	if prop.SAPLabel != nil && *prop.SAPLabel != "" {
+		desc = fmt.Sprintf("%s (%s)", desc, *prop.SAPLabel)
+	}
+	return desc
+}
+
 // generateServiceInfoTool creates a tool to get service information
 func (b *ODataMCPBridge) generateServiceInfoTool() {
 	toolName := b.formatToolName("odata_service_info", "")
@@ -379,7 +392,7 @@ func (b *ODataMCPBridge) generateFilterTool(entitySetName string, entitySet *mod
 		},
 		b.getParameterName("$select"): map[string]interface{}{
 			"type":        "string",
-			"description": "Comma-separated list of properties to select",
+			"description": "Comma-separated list of properties to select (property names; SAP labels are in include_metadata under entity_types_detail.<Entity>.properties[].sap_label)",
 		},
 		b.getParameterName("$expand"): map[string]interface{}{
 			"type":        "string",
@@ -482,7 +495,7 @@ func (b *ODataMCPBridge) generateSearchTool(entitySetName string, entitySet *mod
 				},
 				b.getParameterName("$select"): map[string]interface{}{
 					"type":        "string",
-					"description": "Comma-separated list of properties to select",
+					"description": "Comma-separated list of properties to select (property names; SAP labels are in include_metadata under entity_types_detail.<Entity>.properties[].sap_label)",
 				},
 				b.getParameterName("$top"): map[string]interface{}{
 					"type":        "integer",
@@ -524,7 +537,7 @@ func (b *ODataMCPBridge) generateGetTool(entitySetName string, entitySet *models
 			if prop.Name == keyProp {
 				properties[keyProp] = map[string]interface{}{
 					"type":        b.getJSONSchemaType(prop.Type),
-					"description": fmt.Sprintf("Key property: %s", keyProp),
+					"description": b.describeProperty("Key property", prop),
 				}
 				required = append(required, keyProp)
 				break
@@ -535,7 +548,7 @@ func (b *ODataMCPBridge) generateGetTool(entitySetName string, entitySet *models
 	// Add optional query parameters
 	properties[b.getParameterName("$select")] = map[string]interface{}{
 		"type":        "string",
-		"description": "Comma-separated list of properties to select",
+		"description": "Comma-separated list of properties to select (property names; SAP labels are in include_metadata under entity_types_detail.<Entity>.properties[].sap_label)",
 	}
 	properties[b.getParameterName("$expand")] = map[string]interface{}{
 		"type":        "string",
@@ -590,7 +603,7 @@ func (b *ODataMCPBridge) generateCreateTool(entitySetName string, entitySet *mod
 
 		properties[prop.Name] = map[string]interface{}{
 			"type":        b.getJSONSchemaType(prop.Type),
-			"description": fmt.Sprintf("Property: %s", prop.Name),
+			"description": b.describeProperty("Property", prop),
 		}
 
 		if !prop.Nullable {
@@ -645,7 +658,7 @@ func (b *ODataMCPBridge) generateUpdateTool(entitySetName string, entitySet *mod
 			if prop.Name == keyProp {
 				properties[keyProp] = map[string]interface{}{
 					"type":        b.getJSONSchemaType(prop.Type),
-					"description": fmt.Sprintf("Key property: %s", keyProp),
+					"description": b.describeProperty("Key property", prop),
 				}
 				required = append(required, keyProp)
 				break
@@ -656,10 +669,10 @@ func (b *ODataMCPBridge) generateUpdateTool(entitySetName string, entitySet *mod
 	// Add updatable properties (optional)
 	for _, prop := range entityType.Properties {
 		if !prop.IsKey {
-			properties[prop.Name] = map[string]interface{}{
-				"type":        b.getJSONSchemaType(prop.Type),
-				"description": fmt.Sprintf("Property: %s", prop.Name),
-			}
+		properties[prop.Name] = map[string]interface{}{
+			"type":        b.getJSONSchemaType(prop.Type),
+			"description": b.describeProperty("Property", prop),
+		}
 		}
 	}
 
@@ -712,7 +725,7 @@ func (b *ODataMCPBridge) generateDeleteTool(entitySetName string, entitySet *mod
 			if prop.Name == keyProp {
 				properties[keyProp] = map[string]interface{}{
 					"type":        b.getJSONSchemaType(prop.Type),
-					"description": fmt.Sprintf("Key property: %s", keyProp),
+					"description": b.describeProperty("Key property", prop),
 				}
 				required = append(required, keyProp)
 				break
