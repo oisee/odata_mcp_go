@@ -10,6 +10,7 @@ type EntityProperty struct {
 	IsKey       bool    `json:"is_key"`
 	Description *string `json:"description,omitempty"`
 	SAPLabel    *string `json:"sap_label,omitempty"`
+	SAPAggregationRole *string `json:"sap_aggregation_role,omitempty"`
 }
 
 // EntityType represents an OData entity type definition

@@ -63,6 +63,7 @@ type Property struct {
 	Precision string   `xml:"Precision,attr"`
 	Scale     string   `xml:"Scale,attr"`
 	SAPLabel  string     `xml:"{http://www.sap.com/Protocols/SAPData}label,attr"`
+	SAPAggregationRole string `xml:"{http://www.sap.com/Protocols/SAPData}aggregation-role,attr"`
 	Attrs     []xml.Attr `xml:",any,attr"`
 }
 
@@ -191,6 +192,13 @@ func parseEntityType(et EntityType) *models.EntityType {
 		if label != "" {
 			property.SAPLabel = &label
 		}
+		aggRole := prop.SAPAggregationRole
+		if aggRole == "" {
+			aggRole = sapAttrFromAttrs(prop.Attrs, "aggregation-role")
+		}
+		if aggRole != "" {
+			property.SAPAggregationRole = &aggRole
+		}
 		entityType.Properties = append(entityType.Properties, property)
 	}
 
@@ -284,8 +292,12 @@ func contains(slice []string, item string) bool {
 }
 
 func sapLabelFromAttrs(attrs []xml.Attr) string {
+	return sapAttrFromAttrs(attrs, "label")
+}
+
+func sapAttrFromAttrs(attrs []xml.Attr, localName string) string {
 	for _, attr := range attrs {
-		if attr.Name.Local != "label" {
+		if attr.Name.Local != localName {
 			continue
 		}
 		if attr.Name.Space == "http://www.sap.com/Protocols/SAPData" ||

@@ -19,7 +19,7 @@ func TestSAPLabelParsingV2(t *testing.T) {
           <PropertyRef Name="ID"/>
         </Key>
         <Property Name="ID" Type="Edm.String" Nullable="false" sap:label="Identifier"/>
-        <Property Name="Bar" Type="Edm.String" sap:label="Bar Label"/>
+        <Property Name="Bar" Type="Edm.String" sap:label="Bar Label" sap:aggregation-role="dimension"/>
       </EntityType>
       <EntityContainer Name="TestContainer">
         <EntitySet Name="Foos" EntityType="Test.Foo"/>
@@ -39,14 +39,19 @@ func TestSAPLabelParsingV2(t *testing.T) {
 	}
 
 	var barLabel *string
+	var barAggRole *string
 	for _, prop := range et.Properties {
 		if prop.Name == "Bar" {
 			barLabel = prop.SAPLabel
+			barAggRole = prop.SAPAggregationRole
 			break
 		}
 	}
 
 	if barLabel == nil || *barLabel != "Bar Label" {
 		t.Fatalf("Expected SAP label 'Bar Label', got %v", barLabel)
+	}
+	if barAggRole == nil || *barAggRole != "dimension" {
+		t.Fatalf("Expected SAP aggregation role 'dimension', got %v", barAggRole)
 	}
 }

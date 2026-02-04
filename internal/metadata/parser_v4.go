@@ -97,6 +97,7 @@ type PropertyV4 struct {
 	Unicode      string   `xml:"Unicode,attr"`
 	DefaultValue string   `xml:"DefaultValue,attr"`
 	SAPLabel     string     `xml:"{http://www.sap.com/Protocols/SAPData}label,attr"`
+	SAPAggregationRole string `xml:"{http://www.sap.com/Protocols/SAPData}aggregation-role,attr"`
 	Attrs        []xml.Attr `xml:",any,attr"`
 }
 
@@ -295,6 +296,13 @@ func parseEntityTypeV4(et EntityTypeV4) *models.EntityType {
 		}
 		if label != "" {
 			property.SAPLabel = &label
+		}
+		aggRole := prop.SAPAggregationRole
+		if aggRole == "" {
+			aggRole = sapAttrFromAttrs(prop.Attrs, "aggregation-role")
+		}
+		if aggRole != "" {
+			property.SAPAggregationRole = &aggRole
 		}
 		entityType.Properties = append(entityType.Properties, property)
 	}
