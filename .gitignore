@@ -44,4 +44,5 @@ claude.*
 .env.local
 .env.*.local
 _fiori_automator/
-ocl
+# OCL binary (not internal/ocl/ directory)
+/ocl

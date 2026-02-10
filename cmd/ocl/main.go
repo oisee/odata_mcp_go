@@ -3,18 +3,24 @@
 // Usage:
 //   ocl parse <file.ocl>     Parse and validate OCL file
 //   ocl parse -              Parse from stdin
+//   ocl run <file.ocl>       Parse and execute OCL file
 //   ocl repl                 Interactive REPL
 package main
 
 import (
 	"bufio"
+	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
 
 	"github.com/zmcp/odata-mcp/internal/ocl"
 	"github.com/zmcp/odata-mcp/internal/ocl/ast"
+	"github.com/zmcp/odata-mcp/internal/ocl/executor"
 )
+
+var verbose bool
 
 func main() {
 	if len(os.Args) < 2 {
@@ -22,16 +28,41 @@ func main() {
 		os.Exit(1)
 	}
 
-	switch os.Args[1] {
+	// Check for -v flag
+	args := os.Args[1:]
+	for i, arg := range args {
+		if arg == "-v" || arg == "--verbose" {
+			verbose = true
+			args = append(args[:i], args[i+1:]...)
+			break
+		}
+	}
+
+	if len(args) == 0 {
+		printUsage()
+		os.Exit(1)
+	}
+
+	switch args[0] {
 	case "parse":
-		if len(os.Args) < 3 {
+		if len(args) < 2 {
 			fmt.Println("Usage: ocl parse <file.ocl> or ocl parse -")
 			os.Exit(1)
 		}
-		if os.Args[2] == "-" {
+		if args[1] == "-" {
 			parseStdin()
 		} else {
-			parseFile(os.Args[2])
+			parseFile(args[1])
+		}
+	case "run":
+		if len(args) < 2 {
+			fmt.Println("Usage: ocl run <file.ocl>")
+			os.Exit(1)
+		}
+		if args[1] == "-" {
+			runStdin()
+		} else {
+			runFile(args[1])
 		}
 	case "repl":
 		runREPL()
@@ -47,10 +78,13 @@ func printUsage() {
 Usage:
   ocl parse <file.ocl>   Parse and validate an OCL file
   ocl parse -            Parse from stdin
+  ocl run <file.ocl>     Parse and execute an OCL file
+  ocl run -v <file.ocl>  Execute with verbose output
   ocl repl               Interactive REPL
 
 Examples:
   echo "SELECT * FROM Orders" | ocl parse -
+  ocl run examples/ocl/northwind-queries.ocl
   ocl repl`)
 }
 
@@ -71,6 +105,108 @@ func parseFile(path string) {
 		os.Exit(1)
 	}
 	parseAndPrint(string(data))
+}
+
+func runStdin() {
+	var input strings.Builder
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		input.WriteString(scanner.Text())
+		input.WriteString("\n")
+	}
+	runSource(input.String(), "")
+}
+
+func runFile(path string) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error reading file: %v\n", err)
+		os.Exit(1)
+	}
+	runSource(string(data), path)
+}
+
+func runSource(source, configHint string) {
+	prog, err := ocl.Parse(source)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Parse error:\n%v\n", err)
+		os.Exit(1)
+	}
+
+	fmt.Printf("✓ Parsed %d statement(s)\n\n", len(prog.AST.Statements))
+
+	// Create executor
+	exec := executor.New()
+	exec.SetVerbose(verbose)
+
+	// Load config if available
+	if configPath := executor.FindConfig(configHint); configPath != "" {
+		config, err := executor.LoadConfig(configPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: config load error: %v\n", err)
+		} else {
+			exec.ApplyConfig(config)
+			if verbose {
+				fmt.Printf("✓ Loaded config from %s\n\n", configPath)
+			}
+		}
+	}
+
+	ctx := context.Background()
+
+	// Execute each statement
+	for i, stmt := range prog.AST.Statements {
+		fmt.Printf("─── Statement %d: %s ───\n", i+1, describeStatement(stmt))
+
+		result, err := exec.Execute(ctx, stmt)
+		if err != nil {
+			fmt.Printf("✗ Error: %v\n\n", err)
+			continue
+		}
+
+		printResult(result)
+		fmt.Println()
+	}
+}
+
+func printResult(r *executor.Result) {
+	switch r.Type {
+	case "service":
+		fmt.Printf("✓ %v\n", r.Data)
+
+	case "query":
+		fmt.Printf("✓ %d result(s) in %v\n", r.Count, r.Elapsed)
+		if verbose {
+			fmt.Printf("  URL: %s\n", r.URL)
+		}
+		if results, ok := r.Data.([]any); ok && len(results) > 0 {
+			// Pretty print first few results
+			limit := 5
+			if len(results) < limit {
+				limit = len(results)
+			}
+			for i := 0; i < limit; i++ {
+				jsonData, _ := json.MarshalIndent(results[i], "  ", "  ")
+				fmt.Printf("  [%d] %s\n", i+1, string(jsonData))
+			}
+			if len(results) > limit {
+				fmt.Printf("  ... and %d more\n", len(results)-limit)
+			}
+		}
+
+	case "create", "update":
+		fmt.Printf("✓ %s completed in %v\n", r.Type, r.Elapsed)
+		if r.Data != nil {
+			jsonData, _ := json.MarshalIndent(r.Data, "  ", "  ")
+			fmt.Printf("  %s\n", string(jsonData))
+		}
+
+	case "delete":
+		fmt.Printf("✓ Deleted in %v\n", r.Elapsed)
+
+	default:
+		fmt.Printf("✓ %s: %v\n", r.Type, r.Data)
+	}
 }
 
 func parseAndPrint(source string) {

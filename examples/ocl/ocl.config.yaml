@@ -1,0 +1,46 @@
+# OCL Configuration File
+# Place as ocl.config.yaml next to your .ocl files or in ~/.ocl/config.yaml
+
+# Service definitions with authentication
+services:
+  # Public services (no auth needed)
+  Northwind:
+    url: https://services.odata.org/V4/Northwind/Northwind.svc
+    auth: none
+
+  TripPin:
+    url: https://services.odata.org/TripPinRESTierService
+    auth: none
+
+  # SAP ES5 (Basic auth)
+  GWSAMPLE:
+    url: https://sapes5.sapdevcenter.com/sap/opu/odata/sap/GWSAMPLE_BASIC
+    auth: basic
+    username: ${SAP_USER}      # From environment variable
+    password: ${SAP_PASSWORD}  # From environment variable
+
+  # Bearer token auth
+  MyAPI:
+    url: https://api.example.com/odata
+    auth: bearer
+    token: ${API_TOKEN}
+
+  # API Key auth
+  AnotherAPI:
+    url: https://another.example.com/odata
+    auth: apikey
+    header: X-API-Key  # Optional, defaults to X-API-Key
+    token: ${ANOTHER_API_KEY}
+
+# Alternative: Inline in OCL file (for quick testing)
+#
+# SERVICE GWSAMPLE "https://sapes5.sapdevcenter.com/sap/opu/odata/sap/GWSAMPLE_BASIC" WITH {
+#   auth: "basic",
+#   username: "my_user",
+#   password: "my_pass"
+# }
+
+# Variables (can be used in queries)
+variables:
+  defaultLimit: 100
+  myCompany: "ACME Corp"
