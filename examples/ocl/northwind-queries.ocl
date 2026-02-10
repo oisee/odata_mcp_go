@@ -1,0 +1,38 @@
+-- OCL Examples: Northwind (Read-Only)
+-- Service: https://services.odata.org/V4/Northwind/Northwind.svc/
+--
+-- This is Microsoft's classic demo OData service.
+-- Read-only, but great for testing queries.
+
+SERVICE Northwind "https://services.odata.org/V4/Northwind/Northwind.svc"
+
+-- Simple query: Get all products
+SELECT * FROM Northwind.Products LIMIT 10
+
+-- Query with filter: Expensive products
+SELECT ProductID, ProductName, UnitPrice
+FROM Northwind.Products
+WHERE UnitPrice > 50
+ORDER BY UnitPrice DESC
+LIMIT 20
+
+-- Cross-entity query: Products with categories
+SELECT p.ProductName, p.UnitPrice, c.CategoryName
+FROM Northwind.Products AS p
+JOIN Northwind.Categories AS c ON p.CategoryID == c.CategoryID
+WHERE p.Discontinued == FALSE
+ORDER BY c.CategoryName, p.ProductName
+
+-- Aggregation: Products per category
+SELECT CategoryID, COUNT(ProductID) AS ProductCount, AVG(UnitPrice) AS AvgPrice
+FROM Northwind.Products
+GROUP BY CategoryID
+HAVING COUNT(ProductID) > 5
+
+-- Order details with customer info
+SELECT o.OrderID, o.OrderDate, c.CompanyName, c.Country
+FROM Northwind.Orders AS o
+JOIN Northwind.Customers AS c ON o.CustomerID == c.CustomerID
+WHERE o.ShipCountry == 'Germany'
+ORDER BY o.OrderDate DESC
+LIMIT 50

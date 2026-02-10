@@ -1,0 +1,69 @@
+-- OCL Examples: TripPin (Full CRUD)
+-- Service: https://services.odata.org/TripPinRESTierService/
+--
+-- OData v4 reference implementation with full CRUD support.
+-- Perfect for testing workflows and mutations.
+
+SERVICE TripPin "https://services.odata.org/TripPinRESTierService"
+
+-- ============================================================================
+-- QUERIES
+-- ============================================================================
+
+-- Get all people
+SELECT UserName, FirstName, LastName, Emails
+FROM TripPin.People
+LIMIT 20
+
+-- Get person with trips
+SELECT p.UserName, p.FirstName, t.Name, t.Budget
+FROM TripPin.People AS p
+JOIN TripPin.Trips AS t ON p.UserName == t.TravelerUserName
+ORDER BY t.Budget DESC
+
+-- Airlines
+SELECT AirlineCode, Name
+FROM TripPin.Airlines
+ORDER BY Name
+
+-- ============================================================================
+-- CRUD OPERATIONS
+-- ============================================================================
+
+-- Create a new person
+CREATE TripPin.People SET
+  UserName = 'odatatest',
+  FirstName = 'OData',
+  LastName = 'Tester',
+  Emails = ['test@example.com']
+$newPerson
+
+-- Update person's name
+UPDATE TripPin.People(UserName = 'odatatest') SET
+  FirstName = 'Updated',
+  LastName = 'Name'
+
+-- Delete test person
+DELETE TripPin.People WHERE UserName == 'odatatest'
+
+-- ============================================================================
+-- WORKFLOW: Plan a Trip
+-- ============================================================================
+
+WORKFLOW PlanTrip($userName, $tripName, $budget)
+  STEP check_user:
+    READ TripPin.People WHERE UserName == $userName $person
+    ASSERT $person != NULL "User not found"
+
+  STEP create_trip:
+    CREATE TripPin.Trips SET
+      Name = $tripName,
+      Budget = $budget,
+      TravelerUserName = $userName
+    $trip
+    ASSERT $trip != NULL "Failed to create trip"
+
+  STEP confirm:
+    READ TripPin.Trips WHERE Name == $tripName $created
+
+EXPOSE PlanTrip AS mcp

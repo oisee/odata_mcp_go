@@ -1,0 +1,103 @@
+-- OCL Examples: SAP ES5 Gateway Demo
+-- Service: https://sapes5.sapdevcenter.com/sap/opu/odata/sap/
+--
+-- SAP's public demo system. Requires ES5 account (free).
+-- Full CRUD + SAP-specific patterns (CSRF, batch, etc.)
+
+SERVICE GWSAMPLE "https://sapes5.sapdevcenter.com/sap/opu/odata/sap/GWSAMPLE_BASIC"
+SERVICE EPM "https://sapes5.sapdevcenter.com/sap/opu/odata/sap/EPM_REF_APPS_PO_APV_SRV"
+
+-- ============================================================================
+-- GWSAMPLE_BASIC - Classic SAP Demo Service
+-- ============================================================================
+
+-- Business Partners
+SELECT BusinessPartnerID, CompanyName, Country, WebAddress
+FROM GWSAMPLE.BusinessPartnerSet
+WHERE Country == 'DE'
+ORDER BY CompanyName
+LIMIT 50
+
+-- Sales Orders with Items
+SELECT h.SalesOrderID, h.CustomerName, h.NetAmount, h.CurrencyCode,
+       i.ProductID, i.Quantity, i.GrossAmount
+FROM GWSAMPLE.SalesOrderSet AS h
+JOIN GWSAMPLE.SalesOrderLineItemSet AS i ON h.SalesOrderID == i.SalesOrderID
+WHERE h.LifecycleStatus == 'N'
+ORDER BY h.NetAmount DESC
+LIMIT 100
+
+-- Products with supplier info
+SELECT p.ProductID, p.Name, p.Price, p.CurrencyCode, s.CompanyName
+FROM GWSAMPLE.ProductSet AS p
+JOIN GWSAMPLE.BusinessPartnerSet AS s ON p.SupplierID == s.BusinessPartnerID
+WHERE p.Category == 'Notebooks'
+
+-- ============================================================================
+-- EPM Purchase Order Approval - Enterprise Scenario
+-- ============================================================================
+
+-- Pending approvals
+SELECT POId, OrderedByName, GrossAmount, CurrencyCode, ChangedAt
+FROM EPM.PurchaseOrders
+WHERE ApprovalStatus == 'P'
+ORDER BY GrossAmount DESC
+
+-- Aggregation: Spend by supplier
+SELECT SupplierName, COUNT(POId) AS OrderCount, SUM(GrossAmount) AS TotalSpend
+FROM EPM.PurchaseOrders
+WHERE ApprovalStatus == 'A'
+GROUP BY SupplierName
+ORDER BY TotalSpend DESC
+
+-- ============================================================================
+-- WORKFLOW: Approve Purchase Order
+-- ============================================================================
+
+WORKFLOW ApprovePO($poId, $note)
+  BEGIN TRANSACTION
+
+  STEP read_po:
+    READ EPM.PurchaseOrders WHERE POId == $poId $po
+    ASSERT $po != NULL "Purchase order not found"
+    ASSERT $po.ApprovalStatus == 'P' "PO is not pending approval"
+
+  STEP check_limit:
+    IF $grossAmount > 10000 THEN
+      ASSERT FALSE "Amount exceeds approval limit - escalation required"
+    ENDIF
+
+  STEP approve:
+    CALL EPM.ApprovePurchaseOrder(POId = $poId, Note = $note) $result
+
+  COMMIT
+
+EXPOSE ApprovePO AS mcp
+
+-- ============================================================================
+-- WORKFLOW: Create Sales Order from Template
+-- ============================================================================
+
+WORKFLOW CreateSalesOrder($customerId, $products)
+  STEP validate_customer:
+    READ GWSAMPLE.BusinessPartnerSet WHERE BusinessPartnerID == $customerId $customer
+    ASSERT $customer != NULL "Customer not found"
+
+  STEP create_header:
+    CREATE GWSAMPLE.SalesOrderSet SET
+      CustomerID = $customerId,
+      CustomerName = $customer.CompanyName,
+      LifecycleStatus = 'N',
+      BillingStatus = 'P',
+      DeliveryStatus = 'P'
+    $order
+
+  STEP add_items:
+    FOREACH $product IN $products
+      CREATE GWSAMPLE.SalesOrderLineItemSet SET
+        SalesOrderID = $orderId,
+        ProductID = $productId,
+        Quantity = $quantity
+    ENDFOR
+
+EXPOSE CreateSalesOrder AS mcp
