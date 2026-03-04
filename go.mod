@@ -3,6 +3,7 @@ module github.com/zmcp/odata-mcp
 go 1.21
 
 require (
+	github.com/icholy/digest v1.1.0
 	github.com/joho/godotenv v1.5.1
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.18.2

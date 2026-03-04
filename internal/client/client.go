@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/icholy/digest"
 	"github.com/zmcp/odata-mcp/internal/constants"
 )
 
@@ -23,6 +24,7 @@ type ODataClient struct {
 	cookies        map[string]string
 	username       string
 	password       string
+	authType       string // "basic" or "digest"
 	csrfToken      string
 	verbose        bool
 	sessionCookies []*http.Cookie // Track session cookies from server
@@ -50,6 +52,17 @@ func NewODataClient(baseURL string, verbose bool) *ODataClient {
 func (c *ODataClient) SetBasicAuth(username, password string) {
 	c.username = username
 	c.password = password
+}
+
+// SetDigestAuth configures HTTP Digest authentication
+func (c *ODataClient) SetDigestAuth(username, password string) {
+	c.username = username
+	c.password = password
+	c.authType = "digest"
+	c.httpClient.Transport = &digest.Transport{
+		Username: username,
+		Password: password,
+	}
 }
 
 // SetCookies configures cookie authentication

@@ -52,7 +52,8 @@ func (c *ODataClient) buildRequest(ctx context.Context, method, endpoint string,
 
 	// Set authentication from configuration (will override context headers if both exist)
 	// This maintains backward compatibility with existing config-based auth
-	if c.username != "" && c.password != "" {
+	// Digest auth is handled at the transport level, so skip SetBasicAuth for digest
+	if c.username != "" && c.password != "" && c.authType != "digest" {
 		req.SetBasicAuth(c.username, c.password)
 		if c.verbose {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] Using configured basic auth\n")

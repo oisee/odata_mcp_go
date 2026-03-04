@@ -65,6 +65,7 @@ func init() {
 	rootCmd.Flags().StringVar(&cfg.Password, "pass", "", "Password for basic authentication (alias for --password)")
 	rootCmd.Flags().StringVar(&cfg.CookieFile, "cookie-file", "", "Path to cookie file in Netscape format")
 	rootCmd.Flags().StringVar(&cfg.CookieString, "cookie-string", "", "Cookie string (key1=val1; key2=val2)")
+	rootCmd.Flags().StringVar(&cfg.AuthType, "auth-type", "basic", "Authentication type: 'basic' or 'digest' (used with --user/--password)")
 
 	// Tool naming options
 	rootCmd.Flags().StringVar(&cfg.ToolPrefix, "tool-prefix", "", "Custom prefix for tool names (use with --no-postfix)")
@@ -418,6 +419,21 @@ func validateHTTPTransport(securityCfg http.SecurityConfig) error {
 }
 
 func processAuthentication(cfg *config.Config) error {
+	// Read auth type from environment if not set via flag
+	if cfg.AuthType == "basic" {
+		if envAuthType := viper.GetString("AUTH_TYPE"); envAuthType != "" {
+			cfg.AuthType = strings.ToLower(envAuthType)
+		}
+	}
+
+	// Validate auth type
+	switch cfg.AuthType {
+	case "basic", "digest":
+		// valid
+	default:
+		return fmt.Errorf("invalid --auth-type value %q: must be 'basic' or 'digest'", cfg.AuthType)
+	}
+
 	// Check for mutually exclusive authentication options
 	authMethods := 0
 	if cfg.CookieFile != "" {
@@ -502,11 +518,13 @@ func processAuthentication(cfg *config.Config) error {
 			}
 		}
 
-		// Set up basic auth if credentials are available
+		// Set up auth if credentials are available
 		if cfg.Username != "" && cfg.Password != "" {
 			if cfg.Verbose {
-				fmt.Fprintf(os.Stderr, "[VERBOSE] Using basic authentication for user: %s\n", cfg.Username)
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Using %s authentication for user: %s\n", cfg.AuthType, cfg.Username)
 			}
+		} else if cfg.AuthType == "digest" && (cfg.Username == "" || cfg.Password == "") {
+			return fmt.Errorf("--auth-type digest requires both --user and --password")
 		} else if cfg.Verbose && len(cfg.Cookies) == 0 {
 			fmt.Fprintf(os.Stderr, "[VERBOSE] No authentication provided or configured. Attempting anonymous access.\n")
 		}

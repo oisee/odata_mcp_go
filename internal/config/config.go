@@ -16,6 +16,7 @@ type Config struct {
 	// Authentication
 	Username     string            `mapstructure:"username"`
 	Password     string            `mapstructure:"password"`
+	AuthType     string            `mapstructure:"auth_type"`
 	CookieFile   string            `mapstructure:"cookie_file"`
 	CookieString string            `mapstructure:"cookie_string"`
 	Cookies      map[string]string // Parsed cookies
@@ -74,9 +75,14 @@ type Config struct {
 	UniversalTool bool `mapstructure:"universal"` // Use single universal OData tool instead of per-entity tools
 }
 
-// HasBasicAuth returns true if username and password are configured
+// HasBasicAuth returns true if username and password are configured for basic auth
 func (c *Config) HasBasicAuth() bool {
-	return c.Username != "" && c.Password != ""
+	return c.Username != "" && c.Password != "" && c.AuthType != "digest"
+}
+
+// HasDigestAuth returns true if digest authentication is configured
+func (c *Config) HasDigestAuth() bool {
+	return c.Username != "" && c.Password != "" && c.AuthType == "digest"
 }
 
 // HasCookieAuth returns true if cookies are configured

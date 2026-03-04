@@ -39,7 +39,9 @@ func NewODataMCPBridge(cfg *config.Config) (*ODataMCPBridge, error) {
 	odataClient := client.NewODataClient(cfg.ServiceURL, cfg.Verbose)
 
 	// Configure authentication
-	if cfg.HasBasicAuth() {
+	if cfg.HasDigestAuth() {
+		odataClient.SetDigestAuth(cfg.Username, cfg.Password)
+	} else if cfg.HasBasicAuth() {
 		odataClient.SetBasicAuth(cfg.Username, cfg.Password)
 	} else if cfg.HasCookieAuth() {
 		odataClient.SetCookies(cfg.Cookies)
@@ -440,7 +442,9 @@ func (b *ODataMCPBridge) GetTraceInfo() (*models.TraceInfo, error) {
 	defer b.mu.RUnlock()
 
 	authType := "None (anonymous)"
-	if b.config.HasBasicAuth() {
+	if b.config.HasDigestAuth() {
+		authType = fmt.Sprintf("Digest (user: %s)", b.config.Username)
+	} else if b.config.HasBasicAuth() {
 		authType = fmt.Sprintf("Basic (user: %s)", b.config.Username)
 	} else if b.config.HasCookieAuth() {
 		authType = fmt.Sprintf("Cookie (%d cookies)", len(b.config.Cookies))
