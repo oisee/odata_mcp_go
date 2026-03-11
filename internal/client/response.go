@@ -144,7 +144,7 @@ func (c *ODataClient) parseErrorFromBody(body []byte, statusCode int) error {
 		} `json:"error"`
 	}
 
-	if err := json.Unmarshal(body, &rawError); err == nil && rawError.Error.Code != "" {
+	if err := json.Unmarshal(body, &rawError); err == nil && rawError.Error.Message != nil {
 		// Extract message - handle both formats
 		var message string
 		switch m := rawError.Error.Message.(type) {
