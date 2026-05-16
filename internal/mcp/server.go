@@ -162,7 +162,23 @@ func (s *Server) HandleMessage(ctx context.Context, msg *transport.Message) (*tr
 	}
 
 	// Handle notifications (no response expected)
-	if req.Method == "initialized" {
+	// if req.Method == "initialized" {
+	// 	s.handleInitialized(req)
+	// 	return nil, nil
+	// }
+
+	// Handle notifications (no response expected per JSON-RPC 2.0).
+	// A notification is any message with no "id" field.
+	if msg.ID == nil || (len(msg.ID) > 0 && string(msg.ID) == "null") {
+		if req.Method == "notifications/initialized" || req.Method == "initialized" {
+			s.handleInitialized(req)
+		}
+		// For any other notification we don't recognize, silently drop it.
+		return nil, nil
+	}
+
+	// Backstop: also accept "notifications/initialized" even if a client incorrectly sends it with an id.
+	if req.Method == "notifications/initialized" || req.Method == "initialized" {
 		s.handleInitialized(req)
 		return nil, nil
 	}
