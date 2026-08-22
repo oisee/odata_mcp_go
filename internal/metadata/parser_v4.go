@@ -3,6 +3,7 @@ package metadata
 import (
 	"encoding/xml"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -125,6 +126,29 @@ type EntitySetV4 struct {
 	Name                       string                      `xml:"Name,attr"`
 	EntityType                 string                      `xml:"EntityType,attr"`
 	NavigationPropertyBindings []NavigationPropertyBinding `xml:"NavigationPropertyBinding"`
+	Annotations                []AnnotationV4              `xml:"Annotation"`
+}
+
+// AnnotationV4 represents an OData v4 annotation
+type AnnotationV4 struct {
+	XMLName xml.Name         `xml:"Annotation"`
+	Term    string           `xml:"Term,attr"`
+	Bool    string           `xml:"Bool,attr"`    // For simple boolean annotations
+	Record  *AnnotationRecord `xml:"Record"`       // For complex annotations
+}
+
+// AnnotationRecord represents a Record element in an annotation
+type AnnotationRecord struct {
+	XMLName        xml.Name              `xml:"Record"`
+	PropertyValues []AnnotationPropValue `xml:"PropertyValue"`
+}
+
+// AnnotationPropValue represents a PropertyValue in an annotation record
+type AnnotationPropValue struct {
+	XMLName  xml.Name `xml:"PropertyValue"`
+	Property string   `xml:"Property,attr"`
+	Bool     string   `xml:"Bool,attr"`
+	String   string   `xml:"String,attr"`
 }
 
 // SingletonV4 represents an OData v4 singleton
@@ -269,6 +293,7 @@ func ParseMetadataV4(data []byte, serviceRoot string) (*models.ODataMetadata, er
 func parseEntityTypeV4(et EntityTypeV4) *models.EntityType {
 	entityType := &models.EntityType{
 		Name:            et.Name,
+		BaseType:        normalizeTypeV4(et.BaseType), // v4: inheritance base type
 		Properties:      make([]*models.EntityProperty, 0),
 		KeyProperties:   make([]string, 0),
 		NavigationProps: make([]*models.NavigationProperty, 0),
@@ -285,7 +310,7 @@ func parseEntityTypeV4(et EntityTypeV4) *models.EntityType {
 			Name:     prop.Name,
 			Type:     normalizeTypeV4(prop.Type),
 			Nullable: prop.Nullable != "false",
-			IsKey:    contains(entityType.KeyProperties, prop.Name),
+			IsKey:    slices.Contains(entityType.KeyProperties, prop.Name),
 		}
 		entityType.Properties = append(entityType.Properties, property)
 	}
@@ -313,15 +338,35 @@ func parseEntitySetV4(es EntitySetV4, namespace string) *models.EntitySet {
 		entityTypeName = parts[len(parts)-1]
 	}
 
+	// Check for capability annotations
+	searchable := false // Default to false (conservative, issue #18)
+
+	for _, ann := range es.Annotations {
+		// Check for SearchRestrictions annotation
+		if strings.HasSuffix(ann.Term, "SearchRestrictions") ||
+			ann.Term == "Org.OData.Capabilities.V1.SearchRestrictions" {
+			// Check if Searchable property is set
+			if ann.Record != nil {
+				for _, pv := range ann.Record.PropertyValues {
+					if pv.Property == "Searchable" {
+						searchable = pv.Bool == "true"
+					}
+				}
+			}
+		}
+	}
+
 	return &models.EntitySet{
 		Name:       es.Name,
 		EntityType: entityTypeName,
 		// OData v4 doesn't have explicit CRUD capability attributes in metadata
-		// We assume all operations are allowed unless restricted by service
+		// We assume CRUD operations are allowed unless restricted by service
 		Creatable:  true,
 		Updatable:  true,
 		Deletable:  true,
-		Searchable: true,
+		// $search support determined from Capabilities.SearchRestrictions annotation
+		// Default to false if not specified (most services don't implement it)
+		Searchable: searchable,
 		Pageable:   true,
 	}
 }

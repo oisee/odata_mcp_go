@@ -1,5 +1,43 @@
 # Security Policy
 
+## 🔒 HTTP Transport Security
+
+When using HTTP/SSE or Streamable HTTP transport, the following security model applies:
+
+### Security Requirements
+
+| Binding | Token | TLS | Allowed? |
+|---------|-------|-----|----------|
+| localhost:8080 | Yes | - | Yes |
+| 192.168.x.x:8080 | Yes | Yes | Yes |
+| 192.168.x.x:8080 | Yes | No | No - TLS required |
+| 192.168.x.x:8080 | No | - | No - token required |
+| 0.0.0.0:8080 | - | - | No - explicit flag required |
+| 0.0.0.0:8080 (--allow-all-interfaces) | Yes | Yes | Yes |
+
+### CLI Flags
+
+```bash
+# Token authentication (required for HTTP transport)
+--mcp-token "secret"           # Token from CLI
+--mcp-token-file /path/to/file # Token from file (recommended for production)
+
+# TLS configuration (required for non-localhost)
+--tls                          # Enable TLS
+--tls-cert /path/to/cert.pem   # Certificate file
+--tls-key /path/to/key.pem     # Private key file
+
+# Network exposure
+--allow-all-interfaces         # Allow 0.0.0.0/:: binding (requires token + TLS)
+```
+
+### Best Practices
+
+1. **Use `--mcp-token-file` instead of `--mcp-token`** to avoid exposing token in process list
+2. **Always use TLS for non-localhost bindings**
+3. **Use specific interface IPs** instead of 0.0.0.0 when possible
+4. **For development**, `--mcp-token dev` is fine - token can be any string
+
 ## 🔒 Credential Protection
 
 This repository has multiple layers of protection against accidental credential commits:

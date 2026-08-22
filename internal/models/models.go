@@ -2,6 +2,10 @@ package models
 
 import "time"
 
+// GUIDValue represents an OData Edm.Guid value that needs special formatting
+// SAP OData requires GUID values in URLs to be prefixed: guid'value'
+type GUIDValue string
+
 // EntityProperty represents a property of an OData entity type
 type EntityProperty struct {
 	Name        string  `json:"name"`
@@ -14,6 +18,7 @@ type EntityProperty struct {
 // EntityType represents an OData entity type definition
 type EntityType struct {
 	Name            string                `json:"name"`
+	BaseType        string                `json:"base_type,omitempty"` // v4: inheritance base type
 	Properties      []*EntityProperty     `json:"properties"`
 	KeyProperties   []string              `json:"key_properties"`
 	Description     *string               `json:"description,omitempty"`
@@ -33,20 +38,20 @@ type NavigationProperty struct {
 
 // EntitySet represents an OData entity set
 type EntitySet struct {
-	Name          string  `json:"name"`
-	EntityType    string  `json:"entity_type"`
-	Creatable     bool    `json:"creatable"`
-	Updatable     bool    `json:"updatable"`
-	Deletable     bool    `json:"deletable"`
-	Searchable    bool    `json:"searchable"`
-	Pageable      bool    `json:"pageable"`
-	Description   *string `json:"description,omitempty"`
+	Name        string  `json:"name"`
+	EntityType  string  `json:"entity_type"`
+	Creatable   bool    `json:"creatable"`
+	Updatable   bool    `json:"updatable"`
+	Deletable   bool    `json:"deletable"`
+	Searchable  bool    `json:"searchable"`
+	Pageable    bool    `json:"pageable"`
+	Description *string `json:"description,omitempty"`
 	// SAP-specific fields
-	SAPCreatable  bool    `json:"sap_creatable,omitempty"`
-	SAPUpdatable  bool    `json:"sap_updatable,omitempty"`
-	SAPDeletable  bool    `json:"sap_deletable,omitempty"`
-	SAPSearchable bool    `json:"sap_searchable,omitempty"`
-	SAPPageable   bool    `json:"sap_pageable,omitempty"`
+	SAPCreatable  bool `json:"sap_creatable,omitempty"`
+	SAPUpdatable  bool `json:"sap_updatable,omitempty"`
+	SAPDeletable  bool `json:"sap_deletable,omitempty"`
+	SAPSearchable bool `json:"sap_searchable,omitempty"`
+	SAPPageable   bool `json:"sap_pageable,omitempty"`
 }
 
 // FunctionImportParameter represents a parameter for a function import

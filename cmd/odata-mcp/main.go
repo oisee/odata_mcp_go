@@ -50,8 +50,8 @@ Operation Filtering Examples:
 }
 
 func init() {
-	// Load .env file if it exists
-	godotenv.Load()
+	// Load .env file if it exists (ignore error if file not found)
+	_ = godotenv.Load()
 
 	// Initialize config
 	cfg = &config.Config{}
@@ -102,7 +102,14 @@ func init() {
 	// Transport options
 	rootCmd.Flags().String("transport", "stdio", "Transport type: 'stdio', 'http' (SSE), or 'streamable-http' (modern MCP)")
 	rootCmd.Flags().String("http-addr", "localhost:8080", "HTTP server address (used with --transport http/streamable-http, defaults to localhost only for security)")
-	rootCmd.Flags().Bool("i-am-security-expert-i-know-what-i-am-doing", false, "DANGEROUS: Allow non-localhost HTTP transport. MCP has no authentication!")
+
+	// Security options for HTTP transport
+	rootCmd.Flags().String("mcp-token", "", "Token for MCP authentication (required for HTTP transport)")
+	rootCmd.Flags().String("mcp-token-file", "", "Path to file containing MCP token (avoids token in CLI history)")
+	rootCmd.Flags().Bool("tls", false, "Enable TLS for HTTP transport (required for non-localhost)")
+	rootCmd.Flags().String("tls-cert", "", "Path to TLS certificate file")
+	rootCmd.Flags().String("tls-key", "", "Path to TLS private key file")
+	rootCmd.Flags().Bool("allow-all-interfaces", false, "Allow binding to all interfaces (0.0.0.0/::) - requires token and TLS")
 
 	// Debug options
 	rootCmd.Flags().Bool("trace-mcp", false, "Enable trace logging to debug MCP communication")
@@ -121,11 +128,17 @@ func init() {
 	// Protocol version override (for AI Foundry compatibility)
 	rootCmd.Flags().StringVar(&cfg.ProtocolVersion, "protocol-version", "", "Override MCP protocol version (e.g., '2025-06-18' for AI Foundry)")
 
+	// Header forwarding (HTTP transport only)
+	rootCmd.Flags().BoolVar(&cfg.ForwardMCPHeaders, "forward-mcp-headers", false, "Forward HTTP headers from MCP connection to OData service (Streamable HTTP transport only)")
+
+	// Universal tool mode (single tool instead of N tools per entity)
+	rootCmd.Flags().BoolVar(&cfg.UniversalTool, "universal", false, "Use single universal OData tool instead of per-entity tools (reduces token usage by 96-98%)")
+
 	// Bind flags to viper for environment variable support
-	viper.BindPFlag("service", rootCmd.Flags().Lookup("service"))
-	viper.BindPFlag("username", rootCmd.Flags().Lookup("user"))
-	viper.BindPFlag("password", rootCmd.Flags().Lookup("password"))
-	viper.BindPFlag("verbose", rootCmd.Flags().Lookup("verbose"))
+	_ = viper.BindPFlag("service", rootCmd.Flags().Lookup("service"))
+	_ = viper.BindPFlag("username", rootCmd.Flags().Lookup("user"))
+	_ = viper.BindPFlag("password", rootCmd.Flags().Lookup("password"))
+	_ = viper.BindPFlag("verbose", rootCmd.Flags().Lookup("verbose"))
 
 	// Set up environment variable mapping
 	viper.SetEnvKeyReplacer(strings.NewReplacer("-", "_"))
@@ -275,71 +288,43 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	var trans transport.Transport
 	switch transportType {
 	case "streamable-http", "streamable":
-		httpAddr, _ := cmd.Flags().GetString("http-addr")
-		expertMode, _ := cmd.Flags().GetBool("i-am-security-expert-i-know-what-i-am-doing")
-
-		// Security check: ensure localhost-only unless expert mode
-		if !expertMode && !isLocalhostAddr(httpAddr) {
-			fmt.Fprintf(os.Stderr, "\n⚠️  SECURITY WARNING ⚠️\n")
-			fmt.Fprintf(os.Stderr, "Streamable HTTP transport is UNPROTECTED - no authentication!\n")
-			fmt.Fprintf(os.Stderr, "For security, HTTP transport is restricted to localhost only.\n")
-			fmt.Fprintf(os.Stderr, "Current address '%s' is not localhost.\n\n", httpAddr)
-			fmt.Fprintf(os.Stderr, "To bind to localhost, use:\n")
-			fmt.Fprintf(os.Stderr, "  --http-addr localhost:8080\n")
-			fmt.Fprintf(os.Stderr, "  --http-addr 127.0.0.1:8080\n")
-			fmt.Fprintf(os.Stderr, "  --http-addr [::1]:8080\n\n")
-			fmt.Fprintf(os.Stderr, "If you REALLY need to expose this service (DANGEROUS!), use:\n")
-			fmt.Fprintf(os.Stderr, "  --i-am-security-expert-i-know-what-i-am-doing\n\n")
-			return fmt.Errorf("refusing to start unprotected HTTP transport on non-localhost address")
+		securityCfg, err := buildSecurityConfig(cmd)
+		if err != nil {
+			return err
 		}
 
-		if expertMode && !isLocalhostAddr(httpAddr) {
-			fmt.Fprintf(os.Stderr, "\n🚨 EXTREME SECURITY WARNING 🚨\n")
-			fmt.Fprintf(os.Stderr, "You are exposing an UNPROTECTED MCP service to the network!\n")
-			fmt.Fprintf(os.Stderr, "MCP has NO authentication mechanism - anyone can connect!\n")
-			fmt.Fprintf(os.Stderr, "This service provides full access to: %s\n", cfg.ServiceURL)
-			fmt.Fprintf(os.Stderr, "Address: %s\n\n", httpAddr)
-			fmt.Fprintf(os.Stderr, "Press Ctrl+C NOW if this is not intentional!\n\n")
+		if err := validateHTTPTransport(securityCfg); err != nil {
+			return err
 		}
 
 		if cfg.Verbose {
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Starting Streamable HTTP transport (protocol 2024-11-05) on %s\n", httpAddr)
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Main endpoint: http://%s/mcp\n", httpAddr)
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Health endpoint: http://%s/health\n", httpAddr)
+			protocol := "http"
+			if securityCfg.TLSEnabled {
+				protocol = "https"
+			}
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Starting Streamable HTTP transport (protocol 2024-11-05) on %s\n", securityCfg.Addr)
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Main endpoint: %s://%s/mcp\n", protocol, securityCfg.Addr)
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Health endpoint: %s://%s/health\n", protocol, securityCfg.Addr)
+			if cfg.ForwardMCPHeaders {
+				fmt.Fprintf(os.Stderr, "[VERBOSE] Header forwarding enabled - HTTP headers will be passed to OData service\n")
+			}
 		}
-		trans = http.NewStreamableHTTP(httpAddr, handler, expertMode)
+		trans = http.NewStreamableHTTP(securityCfg.Addr, handler, securityCfg.Token != "", cfg.ForwardMCPHeaders)
 	case "http", "sse":
-		httpAddr, _ := cmd.Flags().GetString("http-addr")
-		expertMode, _ := cmd.Flags().GetBool("i-am-security-expert-i-know-what-i-am-doing")
-
-		// Security check: ensure localhost-only unless expert mode
-		if !expertMode && !isLocalhostAddr(httpAddr) {
-			fmt.Fprintf(os.Stderr, "\n⚠️  SECURITY WARNING ⚠️\n")
-			fmt.Fprintf(os.Stderr, "HTTP/SSE transport is UNPROTECTED - no authentication!\n")
-			fmt.Fprintf(os.Stderr, "For security, HTTP transport is restricted to localhost only.\n")
-			fmt.Fprintf(os.Stderr, "Current address '%s' is not localhost.\n\n", httpAddr)
-			fmt.Fprintf(os.Stderr, "To bind to localhost, use:\n")
-			fmt.Fprintf(os.Stderr, "  --http-addr localhost:8080\n")
-			fmt.Fprintf(os.Stderr, "  --http-addr 127.0.0.1:8080\n")
-			fmt.Fprintf(os.Stderr, "  --http-addr [::1]:8080\n\n")
-			fmt.Fprintf(os.Stderr, "If you REALLY need to expose this service (DANGEROUS!), use:\n")
-			fmt.Fprintf(os.Stderr, "  --i-am-security-expert-i-know-what-i-am-doing\n\n")
-			return fmt.Errorf("refusing to start unprotected HTTP transport on non-localhost address")
+		securityCfg, err := buildSecurityConfig(cmd)
+		if err != nil {
+			return err
 		}
 
-		if expertMode && !isLocalhostAddr(httpAddr) {
-			fmt.Fprintf(os.Stderr, "\n🚨 EXTREME SECURITY WARNING 🚨\n")
-			fmt.Fprintf(os.Stderr, "You are exposing an UNPROTECTED MCP service to the network!\n")
-			fmt.Fprintf(os.Stderr, "MCP has NO authentication mechanism - anyone can connect!\n")
-			fmt.Fprintf(os.Stderr, "This service provides full access to: %s\n", cfg.ServiceURL)
-			fmt.Fprintf(os.Stderr, "Address: %s\n\n", httpAddr)
-			fmt.Fprintf(os.Stderr, "Press Ctrl+C NOW if this is not intentional!\n\n")
+		if err := validateHTTPTransport(securityCfg); err != nil {
+			return err
 		}
 
 		if cfg.Verbose {
-			fmt.Fprintf(os.Stderr, "[VERBOSE] Starting HTTP/SSE transport on %s\n", httpAddr)
+			fmt.Fprintf(os.Stderr, "[VERBOSE] Starting HTTP/SSE transport on %s\n", securityCfg.Addr)
 		}
-		trans = http.NewSSE(httpAddr, handler)
+		trans = http.NewSSE(securityCfg.Addr, handler)
+
 	case "stdio":
 		fallthrough
 	default:
@@ -373,26 +358,63 @@ func runBridge(cmd *cobra.Command, args []string) error {
 	}
 }
 
-// isLocalhostAddr checks if the given address is localhost-only
-func isLocalhostAddr(addr string) bool {
-	// Handle cases like ":8080" which bind to all interfaces
-	if strings.HasPrefix(addr, ":") {
-		return false
+// buildSecurityConfig builds SecurityConfig from CLI flags
+func buildSecurityConfig(cmd *cobra.Command) (http.SecurityConfig, error) {
+	httpAddr, _ := cmd.Flags().GetString("http-addr")
+	token, _ := cmd.Flags().GetString("mcp-token")
+	tokenFile, _ := cmd.Flags().GetString("mcp-token-file")
+	tlsEnabled, _ := cmd.Flags().GetBool("tls")
+	tlsCert, _ := cmd.Flags().GetString("tls-cert")
+	tlsKey, _ := cmd.Flags().GetString("tls-key")
+	allowAllInterfaces, _ := cmd.Flags().GetBool("allow-all-interfaces")
+
+	// Load token from file if specified
+	if tokenFile != "" && token == "" {
+		data, err := os.ReadFile(tokenFile)
+		if err != nil {
+			return http.SecurityConfig{}, fmt.Errorf("failed to read token file: %w", err)
+		}
+		token = strings.TrimSpace(string(data))
 	}
 
-	// Extract host part (before the colon)
-	host := addr
-	if idx := strings.LastIndex(addr, ":"); idx != -1 {
-		host = addr[:idx]
-		// Handle IPv6 addresses like [::1]:8080
-		host = strings.Trim(host, "[]")
+	return http.SecurityConfig{
+		Addr:               httpAddr,
+		Token:              token,
+		TLSEnabled:         tlsEnabled,
+		TLSCert:            tlsCert,
+		TLSKey:             tlsKey,
+		AllowAllInterfaces: allowAllInterfaces,
+	}, nil
+}
+
+// maskToken returns a masked version of the token for logging
+func maskToken(token string) string {
+	if token == "" {
+		return "(none)"
+	}
+	if len(token) <= 4 {
+		return "****"
+	}
+	return token[:2] + "****" + token[len(token)-2:]
+}
+
+// validateHTTPTransport validates security config and prints warnings for non-localhost
+func validateHTTPTransport(securityCfg http.SecurityConfig) error {
+	if err := http.ValidateHTTPSecurity(securityCfg); err != nil {
+		return fmt.Errorf("security validation failed: %w", err)
 	}
 
-	// Check for localhost variants
-	return host == "localhost" ||
-		host == "127.0.0.1" ||
-		host == "::1" ||
-		host == "" // empty host defaults to localhost
+	// Show warning for non-localhost even if valid
+	if !http.IsLoopbackAddr(securityCfg.Addr) {
+		fmt.Fprintf(os.Stderr, "\n⚠️  Non-localhost HTTP transport enabled\n")
+		fmt.Fprintf(os.Stderr, "Address: %s\n", securityCfg.Addr)
+		if securityCfg.TLSEnabled {
+			fmt.Fprintf(os.Stderr, "TLS: Enabled\n")
+		}
+		fmt.Fprintf(os.Stderr, "Token: %s\n\n", maskToken(securityCfg.Token))
+	}
+
+	return nil
 }
 
 func processAuthentication(cfg *config.Config) error {

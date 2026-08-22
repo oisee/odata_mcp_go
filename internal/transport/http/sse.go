@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -57,7 +58,9 @@ func (t *SSETransport) Start(ctx context.Context) error {
 	// Health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		if err := json.NewEncoder(w).Encode(map[string]string{"status": "ok"}); err != nil {
+			log.Printf("health check: failed to encode response: %v", err)
+		}
 	})
 
 	t.server = &http.Server{
@@ -179,7 +182,9 @@ func (t *SSETransport) handleRPC(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("handleRPC: failed to encode response: %v", err)
+	}
 }
 
 // processMessages handles incoming messages from clients
@@ -208,7 +213,11 @@ func (t *SSETransport) processMessages(ctx context.Context) {
 				t.mu.RUnlock()
 
 				if exists && response != nil {
-					data, _ := json.Marshal(response)
+					data, err := json.Marshal(response)
+					if err != nil {
+						log.Printf("processMessages: failed to marshal response: %v", err)
+						continue
+					}
 					select {
 					case client.events <- data:
 					default:

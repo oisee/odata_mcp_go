@@ -69,12 +69,12 @@ func (t *StdioTransport) Start(ctx context.Context) error {
 							Message: err.Error(),
 						},
 					}
-					if err := t.WriteMessage(errorResponse); err != nil {
-						// Silently continue to avoid stderr interference
+					if writeErr := t.WriteMessage(errorResponse); writeErr != nil && t.tracer != nil {
+						t.tracer.LogError("Failed to write error response", writeErr, errorResponse)
 					}
 				} else if response != nil {
-					if err := t.WriteMessage(response); err != nil {
-						// Silently continue to avoid stderr interference
+					if writeErr := t.WriteMessage(response); writeErr != nil && t.tracer != nil {
+						t.tracer.LogError("Failed to write response", writeErr, response)
 					}
 				}
 			}

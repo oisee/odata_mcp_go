@@ -7,6 +7,13 @@ MAIN_PATH=cmd/odata-mcp/main.go
 BUILD_DIR=build
 DIST_DIR=dist
 
+# Add .exe extension on Windows
+ifeq ($(OS),Windows_NT)
+BINARY_EXT=.exe
+else
+BINARY_EXT=
+endif
+
 # Version detection - uses git tags if available, otherwise generates from commit count
 GIT_TAG=$(shell git describe --tags --exact-match 2>/dev/null)
 GIT_COMMIT_COUNT=$(shell git rev-list --count HEAD 2>/dev/null || echo "0")
@@ -82,8 +89,8 @@ help:
 .PHONY: build
 build: deps
 	@echo "Building $(BINARY_NAME) for current platform..."
-	go build $(LDFLAGS) $(GCFLAGS) $(ASMFLAGS) -o $(BINARY_NAME) $(MAIN_PATH)
-	@echo "✅ Build complete: $(BINARY_NAME)"
+	go build $(LDFLAGS) $(GCFLAGS) $(ASMFLAGS) -o $(BINARY_NAME)$(BINARY_EXT) $(MAIN_PATH)
+	@echo "✅ Build complete: $(BINARY_NAME)$(BINARY_EXT)"
 
 # Cross-compilation targets
 .PHONY: build-linux
@@ -163,9 +170,9 @@ test:
 
 # Run regression test to ensure binary exists and works
 .PHONY: test-regression
-test-regression: 
+test-regression:
 	@echo "Running regression tests (binary must exist)..."
-	@if [ ! -f "$(BINARY_NAME)" ]; then \
+	@if [ ! -f "$(BINARY_NAME)$(BINARY_EXT)" ]; then \
 		echo "❌ Binary not found! Run 'make build' first."; \
 		exit 1; \
 	fi
@@ -211,6 +218,7 @@ lint:
 .PHONY: clean
 clean:
 	@echo "Cleaning build artifacts..."
+	rm -f $(BINARY_NAME) $(BINARY_NAME).exe
 	rm -rf $(BUILD_DIR)
 	rm -rf $(DIST_DIR)
 	go clean
@@ -220,13 +228,13 @@ clean:
 .PHONY: run
 run: build
 	@echo "Running $(BINARY_NAME) with OData demo service..."
-	./$(BINARY_NAME) --trace --service https://services.odata.org/V2/OData/OData.svc/
+	./$(BINARY_NAME)$(BINARY_EXT) --trace --service https://services.odata.org/V2/OData/OData.svc/
 
 # Run with Northwind service
 .PHONY: run-northwind
 run-northwind: build
 	@echo "Running $(BINARY_NAME) with Northwind service..."
-	./$(BINARY_NAME) --trace --service https://services.odata.org/V2/Northwind/Northwind.svc/
+	./$(BINARY_NAME)$(BINARY_EXT) --trace --service https://services.odata.org/V2/Northwind/Northwind.svc/
 
 # Create distribution packages
 .PHONY: dist
@@ -317,7 +325,7 @@ check:
 # Quick development iteration
 .PHONY: quick
 quick:
-	go build -o $(BINARY_NAME) $(MAIN_PATH) && ./$(BINARY_NAME) --help
+	go build -o $(BINARY_NAME)$(BINARY_EXT) $(MAIN_PATH) && ./$(BINARY_NAME)$(BINARY_EXT) --help
 
 # Create a new release (requires gh CLI)
 .PHONY: release

@@ -4,22 +4,79 @@ A Go implementation of the OData to Model Context Protocol (MCP) bridge, providi
 
 This is a Go port of the Python OData-MCP bridge implementation, designed to be easier to run on different operating systems with better performance and simpler deployment. It supports both OData v2 and v4 services.
 
-## 🆕 What's New (v1.5.1)
+## 🆕 What's New (v1.6.0)
 
-- **AI Foundry Compatibility**: Full support for AI Foundry's MCP client
-  - Configurable protocol version with `--protocol-version` flag
-  - Support for protocol version `2025-06-18` (AI Foundry)
-  - Maintains backward compatibility with Claude (default: `2024-11-05`)
-  - See [AI Foundry Compatibility Guide](AI_FOUNDRY_COMPATIBILITY.md) for details
+### Universal Tool Mode — One Tool to Rule Them All
 
-- **SAP GUID Filtering** (v1.5.0): Automatic formatting of GUID values for SAP OData services
-  - Transforms `'uuid'` to `guid'uuid'` format automatically
-  - No configuration needed - automatic SAP service detection
+The biggest addition is **Universal Tool Mode** (`--universal`), a game-changer for large OData services:
 
-- **Streamable HTTP Transport** (v1.5.0): Modern MCP protocol support with `--transport streamable-http`
-  - Single `/mcp` endpoint with automatic SSE upgrade
-  - Bidirectional communication and session management
-  - Better alignment with Python MCP ecosystem
+```bash
+# Before: 485 tools, ~37,000 tokens, Claude says "no API available"
+./odata-mcp https://large-sap-service.com/odata/
+
+# After: 1 tool, ~900 tokens, works perfectly
+./odata-mcp --universal https://large-sap-service.com/odata/
+```
+
+| Metric | Standard Mode | Universal Mode | Reduction |
+|--------|---------------|----------------|-----------|
+| Tools (Northwind) | 157 | 1 | 99.4% |
+| Tools (SAP BP) | 485 | 1 | 99.8% |
+| Token usage | ~37,000 | ~900 | 97.6% |
+
+**Why is it opt-in?** Universal mode changes how you interact with OData:
+- Standard mode: Each entity gets dedicated tools (`filter_Products`, `get_Orders`, etc.)
+- Universal mode: One `odata` tool with `action`, `target`, and `params`
+
+We made it opt-in because:
+1. **Backward compatibility** — existing configs and workflows continue working
+2. **Discoverability** — per-entity tools are self-documenting; LLMs can see exactly what's available
+3. **Simplicity for small services** — if you have 20 tools, per-entity mode works great
+4. **Explicit choice** — users should consciously choose the trade-off
+
+**When to use `--universal`:**
+- Service has 50+ entity sets
+- Running multiple OData services simultaneously
+- Experiencing "no API available" or tool selection failures
+- Want minimal token footprint
+
+See [Universal Tool Architecture](docs/008-issue-14-universal-tool-architecture.md) for the full story.
+
+### MCP Header Forwarding
+
+New `--forward-mcp-headers` flag enables passing HTTP headers from MCP clients to OData services:
+
+```bash
+./odata-mcp --transport streamable-http --forward-mcp-headers https://secured-service.com/odata/
+```
+
+This enables:
+- **Dynamic authentication** — pass credentials per-request instead of at startup
+- **Multi-tenant scenarios** — different users with different tokens
+- **Custom headers** — `X-*` headers flow through to OData
+
+### Issue Fixes Bonanza
+
+This release fixes 10 open issues:
+
+| Issue | Problem | Fix |
+|-------|---------|-----|
+| #12 | SAP OData shows no tools | Fixed XML namespace parsing (`sap:creatable` etc.) |
+| #13 | `--max-items 99999` crashes | Added validation (max 10,000) |
+| #14 | Multiple services = Claude stuck | Universal tool mode |
+| #16 | GUID formatting wrong | Auto-detect SAP, add `guid'...'` prefix |
+| #17 | Timeout instead of error | Immediate error response |
+| #18 | Wildcard search fails | Parse `SearchRestrictions` annotation |
+| #19 | Timeout hides SAP error | Return actual error message |
+| #22 | BaseType not exposed | Added to EntityType model |
+| #23 | Header handling | `--forward-mcp-headers` flag |
+| #25 | Windows build no .exe | Fixed Makefile for Windows |
+
+### Previous Releases
+
+- **AI Foundry Compatibility** (v1.5.1): `--protocol-version` flag for AI Foundry's `2025-06-18` protocol
+- **SAP GUID Filtering** (v1.5.0): Automatic `guid'...'` formatting for SAP services
+- **Streamable HTTP Transport** (v1.5.0): Modern MCP protocol with `--transport streamable-http`
 
 ## Features
 
@@ -377,18 +434,14 @@ The OData MCP bridge supports two transport mechanisms:
 1. **STDIO (default)** - Standard input/output communication, used by Claude Desktop
 2. **HTTP/SSE** - HTTP server with Server-Sent Events for web-based clients
 
-> 🔒 **SECURITY WARNING**: The HTTP/SSE transport has **NO AUTHENTICATION** - anyone who can connect can access your OData service!
-> 
-> **By default, HTTP transport is restricted to localhost only for security.**
-> 
-> Safer usage scenarios:
-> - Local development (localhost only) - **DEFAULT & RECOMMENDED**
-> - Behind a reverse proxy with authentication
-> - Private networks with proper firewall rules (requires expert flag)
-> 
-> **NEVER expose the HTTP transport to the internet without additional security measures!**
-> 
-> 🤖 **REMEMBER**: Skynet happened because open MCP-SSE ports were exposed to the internet with sudo rights. Protect the planet, protect humanity - do not use SSE/HTTP transport until it becomes more mature from a security perspective.
+> 🔒 **SECURITY MODEL**: HTTP transport uses a strict security model.
+>
+> **Security Requirements:**
+> - **Localhost**: Token required (`--mcp-token`)
+> - **Non-localhost**: Token + TLS required, no exceptions
+> - **All interfaces (0.0.0.0/::)**: Requires `--allow-all-interfaces` + token + TLS
+>
+> Token can be any string - for dev, `--mcp-token dev` works fine.
 
 #### Using Streamable HTTP Transport (Modern MCP Protocol)
 
@@ -411,20 +464,21 @@ Streamable HTTP endpoints:
 
 ```bash
 # Start server on localhost (default: localhost:8080)
-./odata-mcp --transport http https://services.odata.org/V2/Northwind/Northwind.svc/
+./odata-mcp --transport http --mcp-token "dev" https://services.odata.org/V2/Northwind/Northwind.svc/
 
 # Use custom localhost port
-./odata-mcp --transport http --http-addr localhost:3000 https://services.odata.org/V2/Northwind/Northwind.svc/
+./odata-mcp --transport http --http-addr localhost:3000 --mcp-token "dev" https://services.odata.org/V2/Northwind/Northwind.svc/
 
-# IPv4 localhost
-./odata-mcp --transport http --http-addr 127.0.0.1:8080 https://services.odata.org/V2/Northwind/Northwind.svc/
+# Non-localhost requires token + TLS
+./odata-mcp --transport http --http-addr 192.168.1.100:8080 \
+  --mcp-token "my-secret-token" --tls --tls-cert cert.pem --tls-key key.pem \
+  https://services.odata.org/V2/Northwind/Northwind.svc/
 
-# IPv6 localhost  
-./odata-mcp --transport http --http-addr [::1]:8080 https://services.odata.org/V2/Northwind/Northwind.svc/
-
-# ⚠️ DANGEROUS: Expose to network (NOT RECOMMENDED!)
-# Only use if you understand the security implications
-./odata-mcp --transport http --http-addr 0.0.0.0:8080 --i-am-security-expert-i-know-what-i-am-doing https://services.odata.org/V2/Northwind/Northwind.svc/
+# All interfaces requires explicit flag + token + TLS
+./odata-mcp --transport http --http-addr 0.0.0.0:8080 \
+  --allow-all-interfaces --mcp-token "my-secret-token" \
+  --tls --tls-cert cert.pem --tls-key key.pem \
+  https://services.odata.org/V2/Northwind/Northwind.svc/
 ```
 
 Legacy HTTP/SSE endpoints:
@@ -562,6 +616,37 @@ Fine-grained control over which operation types are available. Operation types a
 
 Note: `--enable` and `--disable` cannot be used together.
 
+### Universal Tool Mode
+
+For large OData services with many entities, the standard per-entity tool generation can create hundreds of tools, causing:
+- **Context rot**: LLMs struggle to reason when tool count exceeds ~128
+- **High token usage**: Tool schemas can consume 15,000-40,000 tokens
+- **Tool selection failures**: LLMs may report "no API available"
+
+Universal mode solves this by generating a single tool that handles all operations:
+
+```bash
+# Enable universal tool mode
+./odata-mcp --universal https://my-service.com/odata/
+
+# Compare tool counts
+./odata-mcp --trace https://my-service.com/odata/           # Standard: many tools
+./odata-mcp --universal --trace https://my-service.com/odata/  # Universal: 1 tool
+```
+
+**When to use universal mode:**
+- Service has more than ~50 entity sets
+- Using multiple OData services simultaneously
+- Experiencing "no API available" errors with large services
+
+**Universal tool usage:**
+```json
+{"action": "list", "target": "Products", "params": {"filter": "Price gt 100", "top": 10}}
+{"action": "get", "target": "Products", "params": {"key": {"ProductID": 1}}}
+{"action": "create", "target": "Orders", "params": {"data": {"CustomerID": "C001"}}}
+{"action": "call", "target": "ReleaseOrder", "params": {"OrderID": "O001"}}
+```
+
 ### Debugging and Inspection
 
 ```bash
@@ -625,7 +710,12 @@ The OData MCP bridge includes a flexible hint system to provide guidance for ser
 | `--hint` | Direct hint JSON or text from CLI | |
 | `--transport` | Transport type: 'stdio', 'http' (SSE), or 'streamable-http' | `stdio` |
 | `--http-addr` | HTTP server address (with --transport http/streamable-http) | `localhost:8080` |
-| `--i-am-security-expert-i-know-what-i-am-doing` | DANGEROUS: Allow non-localhost HTTP transport | `false` |
+| `--mcp-token` | Authentication token for HTTP transport (required) | |
+| `--mcp-token-file` | Path to file containing authentication token | |
+| `--tls` | Enable TLS for HTTP transport | `false` |
+| `--tls-cert` | Path to TLS certificate file | |
+| `--tls-key` | Path to TLS key file | |
+| `--allow-all-interfaces` | Allow binding to 0.0.0.0/:: (requires --mcp-token and --tls) | `false` |
 | `--legacy-dates` | Enable legacy date format conversion | `true` |
 | `--no-legacy-dates` | Disable legacy date format conversion | `false` |
 | `--convert-dates-from-sap` | Convert SAP date formats in responses | `false` |
@@ -636,6 +726,8 @@ The OData MCP bridge includes a flexible hint system to provide guidance for ser
 | `--verbose-errors` | Provide detailed error context | `false` |
 | `--claude-code-friendly, -c` | Remove $ prefix from OData parameters for Claude Code CLI compatibility | `false` |
 | `--protocol-version` | Override MCP protocol version (e.g., '2025-06-18' for AI Foundry) | `2024-11-05` |
+| `--forward-mcp-headers` | Forward HTTP headers from MCP connection to OData service (Streamable HTTP only) | `false` |
+| `--universal` | Use single universal OData tool instead of per-entity tools (reduces context for large services) | `false` |
 
 ### Environment Variables
 

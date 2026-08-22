@@ -69,7 +69,7 @@ func (t *TraceLogger) Log(level, message string, data interface{}) {
 
 	jsonData, _ := json.Marshal(entry)
 	fmt.Fprintf(t.file, "%s\n", jsonData)
-	t.file.Sync() // Force write to disk
+	_ = t.file.Sync() // Best-effort sync to disk
 }
 
 // LogRequest logs an incoming JSON-RPC request

@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/zmcp/odata-mcp/internal/client"
 	"github.com/zmcp/odata-mcp/internal/transport"
 )
 
@@ -23,6 +25,7 @@ type StreamableHTTPTransport struct {
 	mu             sync.RWMutex
 	activeStreams  map[string]*streamContext
 	enableSecurity bool
+	forwardHeaders bool // Whether to forward HTTP headers to OData client
 }
 
 type streamContext struct {
@@ -34,12 +37,13 @@ type streamContext struct {
 }
 
 // NewStreamableHTTP creates a new Streamable HTTP transport
-func NewStreamableHTTP(addr string, handler transport.Handler, enableSecurity bool) *StreamableHTTPTransport {
+func NewStreamableHTTP(addr string, handler transport.Handler, enableSecurity bool, forwardHeaders bool) *StreamableHTTPTransport {
 	return &StreamableHTTPTransport{
 		addr:           addr,
 		handler:        handler,
 		activeStreams:  make(map[string]*streamContext),
 		enableSecurity: enableSecurity,
+		forwardHeaders: forwardHeaders,
 	}
 }
 
@@ -54,11 +58,13 @@ func (t *StreamableHTTPTransport) Start(ctx context.Context) error {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		json.NewEncoder(w).Encode(map[string]string{
+		if err := json.NewEncoder(w).Encode(map[string]string{
 			"status":    "ok",
 			"transport": "streamable-http",
 			"protocol":  "2024-11-05",
-		})
+		}); err != nil {
+			log.Printf("health check: failed to encode response: %v", err)
+		}
 	})
 
 	// Legacy SSE endpoint for backward compatibility
@@ -88,14 +94,14 @@ func (t *StreamableHTTPTransport) addSecurityHeaders(next http.Handler) http.Han
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Security check for non-localhost connections
 		if !t.enableSecurity && !isLocalhost(r.RemoteAddr) && !isLocalhost(r.Host) {
-			http.Error(w, "Remote connections not allowed without --i-am-security-expert-i-know-what-i-am-doing flag", http.StatusForbidden)
+			http.Error(w, "Remote connections require --mcp-token with --tls and --allow-all-interfaces", http.StatusForbidden)
 			return
 		}
 
 		// Add security headers
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
-		
+
 		// CORS headers for local development
 		if isLocalhost(r.Host) {
 			w.Header().Set("Access-Control-Allow-Origin", "*")
@@ -130,8 +136,15 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Process the message
+	// Enrich context with HTTP headers for forwarding to OData service (if enabled)
 	ctx := r.Context()
+	if t.forwardHeaders {
+		// Clone headers to avoid any modification issues
+		headers := r.Header.Clone()
+		ctx = context.WithValue(ctx, client.HTTPHeadersContextKey, headers)
+	}
+
+	// Process the message with enriched context
 	response, err := t.handler(ctx, &msg)
 	if err != nil {
 		response = &transport.Message{
@@ -163,7 +176,7 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 func (t *StreamableHTTPTransport) shouldUpgradeToStream(request, response *transport.Message) bool {
 	// Check if the response indicates streaming would be beneficial
 	// This could be based on response size, method type, or explicit flags
-	
+
 	// For now, check if it's a method that typically streams
 	streamingMethods := []string{
 		"tools/call",
@@ -200,7 +213,9 @@ func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, r *http.Re
 	if !ok {
 		// Fall back to regular response
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(initialResponse)
+		if err := json.NewEncoder(w).Encode(initialResponse); err != nil {
+			log.Printf("upgradeToSSE: failed to encode fallback response: %v", err)
+		}
 		return
 	}
 
@@ -233,16 +248,20 @@ func (t *StreamableHTTPTransport) upgradeToSSE(w http.ResponseWriter, r *http.Re
 
 	// Send initial response as first event
 	if initialResponse != nil {
-		t.sendSSEMessage(stream, "message", initialResponse)
+		if err := t.sendSSEMessage(stream, "message", initialResponse); err != nil {
+			log.Printf("upgradeToSSE: failed to send initial response: %v", err)
+		}
 	}
 
 	// Handle resume from last event if provided
 	if lastEventID != "" {
 		// In a real implementation, you'd replay missed events here
-		t.sendSSEMessage(stream, "resume", map[string]string{
+		if err := t.sendSSEMessage(stream, "resume", map[string]string{
 			"last_event_id": lastEventID,
 			"status":        "resumed",
-		})
+		}); err != nil {
+			log.Printf("upgradeToSSE: failed to send resume message: %v", err)
+		}
 	}
 
 	// Keep connection alive with periodic pings
@@ -279,7 +298,7 @@ func (t *StreamableHTTPTransport) sendSSEMessage(stream *streamContext, eventTyp
 	eventID := fmt.Sprintf("%s-%d", stream.id, time.Now().UnixNano())
 
 	// Send SSE formatted message
-	_, err = fmt.Fprintf(stream.writer, "id: %s\nevent: %s\ndata: %s\n\n", 
+	_, err = fmt.Fprintf(stream.writer, "id: %s\nevent: %s\ndata: %s\n\n",
 		eventID, eventType, jsonData)
 	if err != nil {
 		return err
@@ -332,7 +351,11 @@ func (t *StreamableHTTPTransport) BroadcastMessage(msg *transport.Message) error
 	defer t.mu.RUnlock()
 
 	for _, stream := range t.activeStreams {
-		go t.sendSSEMessage(stream, "broadcast", msg)
+		go func(s *streamContext) {
+			if err := t.sendSSEMessage(s, "broadcast", msg); err != nil {
+				log.Printf("BroadcastMessage: failed to send to stream %s: %v", s.id, err)
+			}
+		}(stream)
 	}
 
 	return nil

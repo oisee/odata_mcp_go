@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **HTTP transport security hardening** (Document 004)
+  - New CLI flags: `--mcp-token`, `--mcp-token-file`
+  - TLS support: `--tls`, `--tls-cert`, `--tls-key`
+  - Explicit all-interfaces binding: `--allow-all-interfaces`
+  - Strict security model: token always required for HTTP transport
+  - Non-localhost requires token + TLS
+  - Binding to 0.0.0.0/:: requires explicit flag + token + TLS
+  - Constant-time token comparison to prevent timing attacks
 - **Streamable HTTP transport** (`--transport streamable-http`)
   - Modern MCP protocol support (version 2024-11-05)
   - Single `/mcp` endpoint for all operations
@@ -80,6 +88,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Makefile now uses dynamic versioning instead of hardcoded version
 
 ### Fixed
+- **SAP OData multi-schema metadata parsing** (Issue #12, Document 005)
+  - Parser now handles multiple Schema elements in EDMX metadata
+  - EntityTypes stored with qualified names (Namespace.TypeName)
+  - Fallback lookup for short names (backward compatibility)
+  - SAP namespace attributes (`sap:creatable`, `sap:deletable`, etc.) now parsed correctly
+  - Function imports with `m:HttpMethod` attribute parsed correctly
 - **Claude Desktop Zod validation errors**
   - Missing capability declarations that caused validation failures
   - Null ID handling that triggered type errors

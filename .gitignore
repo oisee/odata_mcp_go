@@ -43,3 +43,4 @@ claude.*
 .env.test
 .env.local
 .env.*.local
+_fiori_automator/

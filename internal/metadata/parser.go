@@ -3,7 +3,7 @@ package metadata
 import (
 	"encoding/xml"
 	"fmt"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/zmcp/odata-mcp/internal/constants"
@@ -17,10 +17,10 @@ type EDMX struct {
 	DataServices DataServices `xml:"DataServices"`
 }
 
-// DataServices contains the schema
+// DataServices contains the schemas (SAP services often have multiple schemas)
 type DataServices struct {
 	XMLName xml.Name `xml:"DataServices"`
-	Schema  Schema   `xml:"Schema"`
+	Schemas []Schema `xml:"Schema"`
 }
 
 // Schema contains entity types, entity sets, and function imports
@@ -86,12 +86,12 @@ type EntitySet struct {
 	XMLName    xml.Name `xml:"EntitySet"`
 	Name       string   `xml:"Name,attr"`
 	EntityType string   `xml:"EntityType,attr"`
-	// SAP-specific attributes
-	Creatable  string `xml:"sap:creatable,attr"`
-	Updatable  string `xml:"sap:updatable,attr"`
-	Deletable  string `xml:"sap:deletable,attr"`
-	Searchable string `xml:"sap:searchable,attr"`
-	Pageable   string `xml:"sap:pageable,attr"`
+	// SAP-specific attributes (use full namespace URL for Go xml parser)
+	Creatable  string `xml:"http://www.sap.com/Protocols/SAPData creatable,attr"`
+	Updatable  string `xml:"http://www.sap.com/Protocols/SAPData updatable,attr"`
+	Deletable  string `xml:"http://www.sap.com/Protocols/SAPData deletable,attr"`
+	Searchable string `xml:"http://www.sap.com/Protocols/SAPData searchable,attr"`
+	Pageable   string `xml:"http://www.sap.com/Protocols/SAPData pageable,attr"`
 }
 
 // FunctionImport represents an OData function import
@@ -99,7 +99,7 @@ type FunctionImport struct {
 	XMLName    xml.Name    `xml:"FunctionImport"`
 	Name       string      `xml:"Name,attr"`
 	ReturnType string      `xml:"ReturnType,attr"`
-	HTTPMethod string      `xml:"m:HttpMethod,attr"`
+	HTTPMethod string      `xml:"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata HttpMethod,attr"`
 	Parameters []Parameter `xml:"Parameter"`
 }
 
@@ -126,35 +126,55 @@ func ParseMetadata(data []byte, serviceRoot string) (*models.ODataMetadata, erro
 		return nil, fmt.Errorf("failed to parse metadata XML: %w", err)
 	}
 
-	schema := edmx.DataServices.Schema
-
 	metadata := &models.ODataMetadata{
 		ServiceRoot:     serviceRoot,
 		EntityTypes:     make(map[string]*models.EntityType),
 		EntitySets:      make(map[string]*models.EntitySet),
 		FunctionImports: make(map[string]*models.FunctionImport),
-		SchemaNamespace: schema.Namespace,
-		ContainerName:   schema.EntityContainer.Name,
 		Version:         edmx.Version,
 		ParsedAt:        time.Now(),
 	}
 
-	// Parse entity types
-	for _, et := range schema.EntityTypes {
-		entityType := parseEntityType(et)
-		metadata.EntityTypes[et.Name] = entityType
-	}
+	// Iterate over all schemas (SAP services often split EntityTypes and EntityContainer across schemas)
+	for _, schema := range edmx.DataServices.Schemas {
+		// Capture namespace from first schema that has one
+		if metadata.SchemaNamespace == "" && schema.Namespace != "" {
+			metadata.SchemaNamespace = schema.Namespace
+		}
 
-	// Parse entity sets
-	for _, es := range schema.EntityContainer.EntitySets {
-		entitySet := parseEntitySet(es, schema.Namespace)
-		metadata.EntitySets[es.Name] = entitySet
-	}
+		// Parse entity types from this schema
+		for _, et := range schema.EntityTypes {
+			entityType := parseEntityType(et)
+			// Store with qualified name (namespace.Name) to handle collisions
+			if schema.Namespace != "" {
+				metadata.EntityTypes[schema.Namespace+"."+et.Name] = entityType
+			} else {
+				metadata.EntityTypes[et.Name] = entityType
+			}
+		}
 
-	// Parse function imports
-	for _, fi := range schema.EntityContainer.FunctionImports {
-		functionImport := parseFunctionImport(fi)
-		metadata.FunctionImports[fi.Name] = functionImport
+		// Parse entity container if present in this schema
+		if schema.EntityContainer.Name != "" {
+			metadata.ContainerName = schema.EntityContainer.Name
+
+			// Parse entity sets
+			for _, es := range schema.EntityContainer.EntitySets {
+				entitySet := parseEntitySet(es)
+				metadata.EntitySets[es.Name] = entitySet
+			}
+
+			// Parse function imports from entity container
+			for _, fi := range schema.EntityContainer.FunctionImports {
+				functionImport := parseFunctionImport(fi)
+				metadata.FunctionImports[fi.Name] = functionImport
+			}
+		}
+
+		// Also check for function imports at schema level (SAP pattern)
+		for _, fi := range schema.FunctionImports {
+			functionImport := parseFunctionImport(fi)
+			metadata.FunctionImports[fi.Name] = functionImport
+		}
 	}
 
 	return metadata, nil
@@ -180,7 +200,7 @@ func parseEntityType(et EntityType) *models.EntityType {
 			Name:     prop.Name,
 			Type:     prop.Type,
 			Nullable: prop.Nullable != "false", // Default to true if not specified
-			IsKey:    contains(entityType.KeyProperties, prop.Name),
+			IsKey:    slices.Contains(entityType.KeyProperties, prop.Name),
 		}
 		entityType.Properties = append(entityType.Properties, property)
 	}
@@ -200,22 +220,17 @@ func parseEntityType(et EntityType) *models.EntityType {
 }
 
 // parseEntitySet converts XML entity set to model
-func parseEntitySet(es EntitySet, namespace string) *models.EntitySet {
-	// Remove namespace prefix from entity type if present
-	entityTypeName := es.EntityType
-	if strings.Contains(entityTypeName, ".") {
-		parts := strings.Split(entityTypeName, ".")
-		entityTypeName = parts[len(parts)-1]
-	}
-
+func parseEntitySet(es EntitySet) *models.EntitySet {
+	// Keep EntityType as-is (may be qualified like "Namespace.TypeName" or short like "TypeName")
+	// The bridge will handle lookup with fallback
 	entitySet := &models.EntitySet{
-		Name:          es.Name,
-		EntityType:    entityTypeName,
-		Creatable:     es.Creatable != "false", // Default to true
-		Updatable:     es.Updatable != "false", // Default to true
-		Deletable:     es.Deletable != "false", // Default to true
-		Searchable:    es.Searchable == "true", // Default to false
-		Pageable:      es.Pageable != "false",  // Default to true
+		Name:       es.Name,
+		EntityType: es.EntityType,
+		Creatable:  es.Creatable != "false", // Default to true
+		Updatable:  es.Updatable != "false", // Default to true
+		Deletable:  es.Deletable != "false", // Default to true
+		Searchable: es.Searchable == "true", // Default to false
+		Pageable:   es.Pageable != "false",  // Default to true
 		// SAP-specific fields (set if attribute is present)
 		SAPCreatable:  es.Creatable != "",
 		SAPUpdatable:  es.Updatable != "",
@@ -262,14 +277,4 @@ func parseFunctionImport(fi FunctionImport) *models.FunctionImport {
 	}
 
 	return functionImport
-}
-
-// contains checks if a slice contains a string
-func contains(slice []string, item string) bool {
-	for _, s := range slice {
-		if s == item {
-			return true
-		}
-	}
-	return false
 }
